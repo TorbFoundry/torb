@@ -29,7 +29,7 @@ end
 # Unset irrelevant variables.
 deactivate nondestructive
 
-set -gx VIRTUAL_ENV "/home/grimm/projects/torb/gen/src/build_files/torb_env"
+set -gx VIRTUAL_ENV "/home/grimm/projects/torb/gen/build_files/torb_env"
 
 set -gx _OLD_VIRTUAL_PATH $PATH
 set -gx PATH "$VIRTUAL_ENV/bin" $PATH
