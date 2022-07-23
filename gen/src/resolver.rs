@@ -1,5 +1,5 @@
-use serde_yaml;
-use std::collections::HashMap;
+use serde_yaml::{self, Value};
+use std::{collections::HashMap, collections::VecDeque};
 
 pub struct ResolverConfig {
     autoaccept: bool,
@@ -11,7 +11,14 @@ pub struct ResolverConfig {
 }
 
 impl ResolverConfig {
-    pub fn new(autoaccept: bool, stack_path: String, stack_name: String, stack_description: String, stack_contents: String, torb_version: String) -> ResolverConfig {
+    pub fn new(
+        autoaccept: bool,
+        stack_path: String,
+        stack_name: String,
+        stack_description: String,
+        stack_contents: String,
+        torb_version: String,
+    ) -> ResolverConfig {
         ResolverConfig {
             autoaccept,
             stack_path,
@@ -23,18 +30,47 @@ impl ResolverConfig {
     }
 }
 
+struct DeployStep {
+    name: String,
+    tool_version: String,
+    tool_name: String,
+    tool_config: HashMap<String, String>,
+}
+struct BuildStep {
+    dockerfile: String,
+    registry: String,
+}
+
+struct StackConfig {
+    meta: String,
+    ingress: bool,
+}
+
 struct DependencyNode {
     name: String,
-    steps: HashMap<String, String>,
+    deploy_steps: HashMap<String, DeployStep>,
+    build_step: Option<BuildStep>,
     dependencies: Vec<DependencyNode>,
+    version: String,
+    kind: String,
 }
 
 impl DependencyNode {
-    pub fn new(name: String, steps: HashMap<String, String>, dependencies: Vec<DependencyNode>) -> DependencyNode {
+    pub fn new(
+        name: String,
+        deploy_steps: HashMap<String, DeployStep>,
+        build_step: Option<BuildStep>,
+        dependencies: Vec<DependencyNode>,
+        version: String,
+        kind: String,
+    ) -> DependencyNode {
         DependencyNode {
             name,
-            steps,
+            deploy_steps: deploy_steps,
+            build_step: build_step,
             dependencies,
+            version,
+            kind,
         }
     }
 
@@ -43,18 +79,20 @@ impl DependencyNode {
     }
 }
 
-struct DependencyGraph {
+struct StackGraph {
     head: DependencyNode,
-    nodes: Vec<DependencyNode>
+    nodes: Vec<DependencyNode>,
+    stack_config: StackConfig,
 }
 
-impl DependencyGraph {
-    pub fn new(head: DependencyNode) -> DependencyGraph {
+impl StackGraph {
+    pub fn new(head: DependencyNode, stack_config: StackConfig) -> StackGraph {
         let graph_nodes = Vec::new();
         graph_nodes.push(head);
-        DependencyGraph {
+        StackGraph {
             nodes: graph_nodes,
-            head: head
+            head,
+            stack_config,
         }
     }
 
@@ -63,30 +101,45 @@ impl DependencyGraph {
     }
 }
 
-
 pub struct Resolver {
     config: ResolverConfig,
+    stack: Value,
 }
 
 impl Resolver {
     pub fn new(config: ResolverConfig) -> Resolver {
         Resolver {
             config: config,
+            stack: serde_yaml::from_str(config.stack_contents.as_str()).unwrap(),
         }
     }
 
-    pub fn resolve(&self) -> Result<(), String> {
-        let mut graph = self.build_graph();
-        self.resolve_graph(&mut graph)
+    pub fn resolve(&self, yaml: serde_yaml::Value) -> Result<(), String> {
+        let mut graph = self.build_graph(yaml);
+        // self.resolve_graph(&mut graph)
+
+        Ok(())
     }
 
-    fn build_graph(&self) -> DependencyGraph {
+    fn build_graph(
+        &self,
+        yaml: serde_yaml::Value,
+    ) -> Result<StackGraph, Box<dyn std::error::Error>> {
+        let meta = serde_yaml::to_string(&yaml["config"]["meta"]).unwrap();
+        let ingress = serde_yaml::to_string(&yaml["config"]["ingress"])
+            .unwrap()
+            .parse::<bool>()
+            .unwrap();
+        let mut graph = StackGraph::new(
+            self.build_node(yaml),
+            StackConfig {
+                meta: meta,
+                ingress: ingress,
+            },
+        );
         let mut nodes = Vec::new();
         let mut head = DependencyNode::new();
         nodes.push(head);
-        DependencyGraph {
-            head,
-            nodes
-        }
+        StackGraph { head, nodes }
     }
 }
