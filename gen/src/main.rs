@@ -3,12 +3,11 @@ use dirs;
 use std::fs;
 use std::fs::File;
 use std::io;
-use std::path::Path;
 use std::process::Command;
 use thiserror::Error;
 use ureq;
 mod resolver;
-use resolver::{Resolver, ResolverConfig};
+use resolver::{Resolver, ResolverConfig, StackGraph};
 
 const VERSION: &'static str = env!("CARGO_PKG_VERSION");
 
@@ -59,28 +58,21 @@ fn init() {
     }
 }
 
-fn resolve_yaml(stack_yaml: &String) -> Result<String, Box<dyn std::error::Error>> {
+fn resolve_yaml(stack_yaml: &String) -> Result<StackGraph, Box<dyn std::error::Error>> {
     let stack_def_yaml: serde_yaml::Value = serde_yaml::from_str(stack_yaml).unwrap();
     let stack_name = stack_def_yaml.get("name").unwrap().as_str().unwrap();
     let stack_description = stack_def_yaml.get("description").unwrap().as_str().unwrap();
-    let stack_meta = stack_def_yaml.get("meta").unwrap().as_str().unwrap();
-    let stack_template_path = Path::new(&stack_meta);
-    if !stack_template_path.is_file() {
-        return Err(Box::new(TorbCliErrors::StackMetaNotFound));
-    } else {
-        let resolver_conf = ResolverConfig::new(
-            false,
-            stack_meta.to_string(),
-            stack_name.to_string(),
-            stack_description.to_string(),
-            stack_yaml.to_string(),
-            VERSION.to_string(),
-        );
+    let resolver_conf = ResolverConfig::new(
+        false,
+        stack_name.to_string(),
+        stack_description.to_string(),
+        stack_yaml.to_string(),
+        VERSION.to_string(),
+    );
 
-        let resolver = Resolver::new(resolver_conf);
+    let resolver = Resolver::new(&resolver_conf);
 
-        return resolver.resolve();
-    }
+    resolver.resolve()
 }
 
 fn update_artifacts() {
@@ -163,7 +155,7 @@ fn main() {
                 println!("Attempting to pull and build stack: {}", stack_name);
                 let stack_yaml: String =
                     pull_stack(stack_name, false).expect("Failed to pull stack from torb-artifacts.");
-                resolve_yaml(&stack_yaml);
+                resolve_yaml(&stack_yaml).unwrap();
             }
         }
         Some("list-stacks") => {
