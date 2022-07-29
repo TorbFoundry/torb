@@ -16,7 +16,7 @@ pub enum TorbCliErrors {
     #[error("Stack manifest missing or invalid. Please run `torb init`")]
     ManifestInvalid,
     #[error("Stack meta template missing or invalid. Please run `torb init`")]
-    StackMetaNotFound
+    StackMetaNotFound,
 }
 
 const TORB_PATH: &str = ".torb";
@@ -66,7 +66,7 @@ fn resolve_yaml(stack_yaml: &String) -> Result<StackGraph, Box<dyn std::error::E
         false,
         stack_name.to_string(),
         stack_description.to_string(),
-        stack_yaml.to_string(),
+        stack_def_yaml.clone(),
         VERSION.to_string(),
     );
 
@@ -87,7 +87,10 @@ fn update_artifacts() {
         .expect("Failed to pull torb-artifacts");
 }
 
-fn pull_stack(stack_name: &str, fail_not_found: bool) -> Result<String, Box<dyn std::error::Error>> {
+fn pull_stack(
+    stack_name: &str,
+    fail_not_found: bool,
+) -> Result<String, Box<dyn std::error::Error>> {
     let home_dir = dirs::home_dir().unwrap();
     let torb_path = home_dir.join(".torb");
     let artifacts_path = torb_path.join("torb-artifacts");
@@ -95,13 +98,10 @@ fn pull_stack(stack_name: &str, fail_not_found: bool) -> Result<String, Box<dyn 
     let stack_manifest_contents = fs::read_to_string(&stack_manifest_path).unwrap();
     let stack_manifest_yaml: serde_yaml::Value =
         serde_yaml::from_str(&stack_manifest_contents).unwrap();
-    let stack_entry = stack_manifest_yaml
-        .get("stacks")
-        .unwrap()
-        .get(stack_name);
+    let stacks = stack_manifest_yaml.get("stacks").unwrap();
+    let stack_entry = stacks.get(stack_name);
 
-    if stack_entry.is_none()
-    {
+    if stack_entry.is_none() {
         if fail_not_found {
             return Err(Box::new(TorbCliErrors::ManifestInvalid));
         }
@@ -109,10 +109,11 @@ fn pull_stack(stack_name: &str, fail_not_found: bool) -> Result<String, Box<dyn 
         update_artifacts();
         return pull_stack(stack_name, true);
     } else {
-        let stack_contents = fs::read(std::path::Path::new(&stack_entry.unwrap().as_str().unwrap()))
+        let stack_entry_str = stack_entry.unwrap().as_str().unwrap();
+        let stack_contents = fs::read(artifacts_path.join("stacks").join(stack_entry_str))
             .map(|s| String::from_utf8(s).unwrap())?;
 
-        return Ok(stack_contents); 
+        return Ok(stack_contents);
     }
 }
 
@@ -120,10 +121,7 @@ fn main() {
     let cli = App::new("torb")
         .version("1.0.0")
         .author("Torb Foundry")
-        .subcommand(
-            SubCommand::with_name("version")
-                .about("Get the version of this torb.")
-        )
+        .subcommand(SubCommand::with_name("version").about("Get the version of this torb."))
         .subcommand(
             SubCommand::with_name("init").about("Initialize Torb, download artifacts and tools."),
         )
@@ -149,12 +147,12 @@ fn main() {
             let stack_name_option = cli_matches
                 .subcommand_matches("build-stack")
                 .unwrap()
-                .value_of("stack-name");
+                .value_of("--stack-name");
 
             if let Some(stack_name) = stack_name_option {
                 println!("Attempting to pull and build stack: {}", stack_name);
-                let stack_yaml: String =
-                    pull_stack(stack_name, false).expect("Failed to pull stack from torb-artifacts.");
+                let stack_yaml: String = pull_stack(stack_name, false)
+                    .expect("Failed to pull stack from torb-artifacts.");
                 resolve_yaml(&stack_yaml).unwrap();
             }
         }

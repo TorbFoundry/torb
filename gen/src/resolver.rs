@@ -6,6 +6,14 @@ use std::{
     path::{PathBuf},
 };
 use thiserror::Error;
+use std::process::Command;
+
+const TORB_PATH: &str = ".torb";
+
+fn torb_path() -> std::path::PathBuf {
+    let home_dir = dirs::home_dir().unwrap();
+    home_dir.join(TORB_PATH)
+}
 
 #[derive(Error, Debug)]
 pub enum TorbResolverErrors {
@@ -20,7 +28,7 @@ pub struct ResolverConfig {
     autoaccept: bool,
     stack_name: String,
     stack_description: String,
-    stack_contents: String,
+    stack_contents: serde_yaml::Value,
     torb_version: String,
 }
 
@@ -29,7 +37,7 @@ impl ResolverConfig {
         autoaccept: bool,
         stack_name: String,
         stack_description: String,
-        stack_contents: String,
+        stack_contents: serde_yaml::Value,
         torb_version: String,
     ) -> ResolverConfig {
         ResolverConfig {
@@ -42,13 +50,13 @@ impl ResolverConfig {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone)]
-pub struct DeployStep {
-    name: String,
-    tool_version: String,
-    tool_name: String,
-    tool_config: HashMap<String, String>,
-}
+// #[derive(Serialize, Deserialize, Clone)]
+// pub struct DeployStep {
+//     name: String,
+//     tool_version: String,
+//     tool_name: String,
+//     tool_config: HashMap<String, String>,
+// }
 #[derive(Serialize, Deserialize, Clone)]
 pub struct BuildStep {
     dockerfile: String,
@@ -63,13 +71,13 @@ pub struct StackConfig {
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct DependencyNode {
-    name: String,
-    #[serde(rename(deserialize = "deploy"))]
-    deploy_steps: HashMap<String, DeployStep>,
-    #[serde(rename(deserialize = "build"))]
-    build_step: Option<BuildStep>,
     version: String,
     kind: String,
+    name: String,
+    #[serde(rename(deserialize = "deploy"))]
+    deploy_steps: HashMap<String, Option<HashMap<String, String>>>,
+    #[serde(rename(deserialize = "build"))]
+    build_step: Option<BuildStep>,
     #[serde(skip)]
     stack_graph: Option<StackGraph>,
     #[serde(skip)]
@@ -81,7 +89,7 @@ pub struct DependencyNode {
 impl DependencyNode {
     pub fn new(
         name: String,
-        deploy_steps: HashMap<String, DeployStep>,
+        deploy_steps: HashMap<String, Option<HashMap<String, String>>>,
         build_step: Option<BuildStep>,
         version: String,
         kind: String,
@@ -128,6 +136,9 @@ pub struct StackGraph {
     name: String,
     version: String,
     kind: String,
+    commit: String,
+    tf_version: String,
+    helm_version: String,
 }
 
 impl StackGraph {
@@ -136,6 +147,9 @@ impl StackGraph {
         name: String,
         kind: String,
         version: String,
+        commit: String,
+        tf_version: String,
+        helm_version: String,
     ) -> StackGraph {
         StackGraph {
             services: HashMap::<String, DependencyNode>::new(),
@@ -145,6 +159,9 @@ impl StackGraph {
             name,
             version,
             kind,
+            tf_version,
+            helm_version,
+            commit,
         }
     }
 
@@ -168,7 +185,7 @@ impl Resolver {
     pub fn new(config: &ResolverConfig) -> Resolver {
         Resolver {
             config: config.clone(),
-            stack: serde_yaml::from_str(config.stack_contents.clone().as_str()).unwrap(),
+            stack: config.stack_contents.clone(),
         }
     }
 
@@ -184,13 +201,13 @@ impl Resolver {
         yaml: serde_yaml::Value,
     ) -> Result<StackGraph, Box<dyn std::error::Error>> {
         let meta = serde_yaml::to_string(&yaml["config"]["meta"]).unwrap();
-        let name = yaml["config"]["name"].as_str().unwrap().to_string();
-        let version = yaml["config"]["version"].as_str().unwrap().to_string();
-        let kind = yaml["config"]["kind"].as_str().unwrap().to_string();
-        let ingress = serde_yaml::to_string(&yaml["config"]["ingress"])
-            .unwrap()
-            .parse::<bool>()
-            .unwrap();
+        let name = yaml["name"].as_str().unwrap().to_string();
+        let version = yaml["version"].as_str().unwrap().to_string();
+        let kind = yaml["kind"].as_str().unwrap().to_string();
+        let ingress = yaml["config"]["ingress"].as_bool().unwrap();
+        let tf_version = self.get_tf_version();
+        let helm_version = self.get_helm_version();
+        let git_sha = self.get_commit_sha();
         let mut graph = StackGraph::new(
             StackConfig {
                 meta: meta,
@@ -199,11 +216,48 @@ impl Resolver {
             name,
             kind,
             version,
+            tf_version,
+            helm_version,
+            git_sha
         );
 
         self.walk_yaml(&mut graph, &yaml);
 
         Ok(graph)
+    }
+
+    fn get_helm_version(&self) -> String {
+        let cmd_out = Command::new("helm")
+            .arg("version")
+            .output()
+            .expect("Failed to get helm version, please make sure helm3 is installed and that the helm alias is in your path.");
+
+        String::from_utf8(cmd_out.stdout).unwrap()
+    }
+
+    fn get_tf_version(&self) -> String {
+        let torb_path = torb_path();
+        let cmd_out = Command::new("./terraform")
+            .arg("version")
+            .arg("-json")
+            .current_dir(torb_path)
+            .output()
+            .expect("Failed to get terraform version, please make sure Torb has been initialized properly.");
+
+        String::from_utf8(cmd_out.stdout).unwrap()
+    }
+
+    fn get_commit_sha(&self) -> String {
+        let torb_path = torb_path();
+        let artifacts_path = torb_path.join("torb-artifacts");
+        let cmd_out = Command::new("git")
+            .arg("rev-parse")
+            .arg("HEAD")
+            .current_dir(artifacts_path)
+            .output()
+            .expect("Failed to get current commit SHA for torb-artifacts, please make sure git is installed and that Torb has been initialized.");
+
+        String::from_utf8(cmd_out.stdout).unwrap()
     }
 
     fn resolve_service(
@@ -219,6 +273,7 @@ impl Resolver {
         let torb_yaml = std::fs::read_to_string(torb_yaml_path)?;
         let mut node: DependencyNode = serde_yaml::from_str(torb_yaml.as_str())?;
         node.fqn = format!("{}-{}-{}", stack_name, stack_kind_name, name);
+
         Ok(node)
     }
 
@@ -229,7 +284,7 @@ impl Resolver {
         name: &str,
         artifact_path: PathBuf,
     ) -> Result<DependencyNode, Box<dyn Error>> {
-        let services_path = artifact_path.join("project");
+        let services_path = artifact_path.join("projects");
         let service_path = services_path.join(name);
         let torb_yaml_path = service_path.join("torb.yaml");
         let torb_yaml = std::fs::read_to_string(torb_yaml_path)?;
@@ -253,7 +308,7 @@ impl Resolver {
         let graph = self.build_graph(serde_yaml::from_str(torb_yaml.as_str())?)?;
         let mut node = DependencyNode::new(
             graph.name.clone(),
-            HashMap::<String, DeployStep>::new(),
+            HashMap::<String, Option<HashMap<String, String>>>::new(),
             None,
             graph.version.clone(),
             "stack".to_string(),
@@ -293,12 +348,19 @@ impl Resolver {
                 return Err(Box::new(err))
             }
         }?;
-        let err = TorbResolverErrors::CannotParseStackManifest;
-        let yaml_str = serde_yaml::to_string(yaml.get("deps").ok_or(err)?)?;
-        let deps: DependencyNodeDependencies = serde_yaml::from_str(yaml_str.as_str()).unwrap();
-        node.dependencies = deps;
+        let dep_values = yaml.get("deps");
+        match dep_values {
+            Some(deps) => {
+                let yaml_str = serde_yaml::to_string(deps)?;
+                let deps: DependencyNodeDependencies = serde_yaml::from_str(yaml_str.as_str()).unwrap();
+                node.dependencies = deps;
 
-        Ok(node)
+                Ok(node)
+            }
+            None => {
+                return Ok(node)
+            }
+        }
     }
 
     fn walk_yaml(&self, graph: &mut StackGraph, yaml: &serde_yaml::Value) {
