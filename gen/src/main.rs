@@ -8,6 +8,8 @@ use thiserror::Error;
 use ureq;
 mod resolver;
 use resolver::{Resolver, ResolverConfig, StackGraph};
+mod artifacts;
+use artifacts::{write_build_file};
 
 const VERSION: &'static str = env!("CARGO_PKG_VERSION");
 
@@ -153,7 +155,8 @@ fn main() {
                 println!("Attempting to pull and build stack: {}", stack_name);
                 let stack_yaml: String = pull_stack(stack_name, false)
                     .expect("Failed to pull stack from torb-artifacts.");
-                resolve_yaml(&stack_yaml).unwrap();
+                let graph = resolve_yaml(&stack_yaml).unwrap();
+                write_build_file(graph);
             }
         }
         Some("list-stacks") => {

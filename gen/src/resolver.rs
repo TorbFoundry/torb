@@ -1,12 +1,8 @@
 use serde::{Deserialize, Serialize};
 use serde_yaml::{self, Value};
-use std::{
-    collections::HashMap,
-    error::Error,
-    path::{PathBuf},
-};
-use thiserror::Error;
 use std::process::Command;
+use std::{collections::HashMap, error::Error, path::PathBuf};
+use thiserror::Error;
 
 const TORB_PATH: &str = ".torb";
 
@@ -65,25 +61,25 @@ pub struct BuildStep {
 
 #[derive(Clone)]
 pub struct StackConfig {
-    meta: String,
-    ingress: bool,
+    pub meta: String,
+    pub ingress: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct DependencyNode {
-    version: String,
-    kind: String,
-    name: String,
+    pub version: String,
+    pub kind: String,
+    pub name: String,
     #[serde(rename(deserialize = "deploy"))]
-    deploy_steps: HashMap<String, Option<HashMap<String, String>>>,
+    pub deploy_steps: HashMap<String, Option<HashMap<String, String>>>,
     #[serde(rename(deserialize = "build"))]
-    build_step: Option<BuildStep>,
+    pub build_step: Option<BuildStep>,
     #[serde(skip)]
-    stack_graph: Option<StackGraph>,
+    pub stack_graph: Option<StackGraph>,
     #[serde(skip)]
-    dependencies: DependencyNodeDependencies,
+    pub dependencies: DependencyNodeDependencies,
     #[serde(skip)]
-    fqn: String
+    pub fqn: String,
 }
 
 impl DependencyNode {
@@ -105,16 +101,16 @@ impl DependencyNode {
             kind,
             stack_graph,
             dependencies,
-            fqn
+            fqn,
         }
     }
 }
 
 #[derive(Serialize, Deserialize, Default, Clone)]
 pub struct DependencyNodeDependencies {
-    services: Option<Vec<String>>,
-    projects: Option<Vec<String>>,
-    stacks: Option<Vec<String>>,
+    pub services: Option<Vec<String>>,
+    pub projects: Option<Vec<String>>,
+    pub stacks: Option<Vec<String>>,
 }
 
 impl DependencyNodeDependencies {
@@ -129,16 +125,17 @@ impl DependencyNodeDependencies {
 
 #[derive(Clone)]
 pub struct StackGraph {
-    stack_config: StackConfig,
-    services: HashMap<String, DependencyNode>,
-    projects: HashMap<String, DependencyNode>,
-    stacks: HashMap<String, DependencyNode>,
-    name: String,
-    version: String,
-    kind: String,
-    commit: String,
-    tf_version: String,
-    helm_version: String,
+    pub stack_config: StackConfig,
+    pub services: HashMap<String, DependencyNode>,
+    pub projects: HashMap<String, DependencyNode>,
+    pub stacks: HashMap<String, DependencyNode>,
+    pub name: String,
+    pub version: String,
+    pub kind: String,
+    pub commit: String,
+    pub tf_version: String,
+    pub helm_version: String,
+    pub incoming_edges: HashMap<String, Vec<String>>,
 }
 
 impl StackGraph {
@@ -162,17 +159,70 @@ impl StackGraph {
             tf_version,
             helm_version,
             commit,
+            incoming_edges: HashMap::<String, Vec<String>>::new(),
         }
     }
 
     pub fn add_service(&mut self, node: &DependencyNode) {
-        self.services.insert(node.name.clone(), node.clone());
+        self.services.insert(node.fqn.clone(), node.clone());
     }
     pub fn add_project(&mut self, node: &DependencyNode) {
-        self.projects.insert(node.name.clone(), node.clone());
+        self.projects.insert(node.fqn.clone(), node.clone());
     }
     pub fn add_stack(&mut self, node: &DependencyNode) {
-        self.stacks.insert(node.name.clone(), node.clone());
+        self.stacks.insert(node.fqn.clone(), node.clone());
+    }
+
+    pub fn add_all_incoming_edges_downstream(&mut self, stack_name: String, node: &DependencyNode) {
+        self.incoming_edges.entry(node.fqn.clone()).or_insert(Vec::<String>::new());
+
+        node.dependencies.projects.as_ref().map_or((), |projects| {
+            projects.iter().for_each(|project| {
+                let p_fqn = format!("{}.{}.{}", stack_name, "project".to_string(), project);
+                match self.incoming_edges.get_mut(p_fqn.as_str()) {
+                    Some(edges) => {
+                        edges.push(node.fqn.clone());
+                    }
+                    None => {
+                        let mut edges = Vec::new();
+                        edges.push(node.fqn.clone());
+                        self.incoming_edges.insert(p_fqn.clone(), edges);
+                    }
+                }
+            });
+        });
+
+        node.dependencies.services.as_ref().map_or((), |projects| {
+            projects.iter().for_each(|project| {
+                let s_fqn = format!("{}.{}.{}", stack_name, "service".to_string(), project);
+                match self.incoming_edges.get_mut(project) {
+                    Some(edges) => {
+                        edges.push(node.fqn.clone());
+                    }
+                    None => {
+                        let mut edges = Vec::new();
+                        edges.push(node.fqn.clone());
+                        self.incoming_edges.insert(s_fqn.clone(), edges);
+                    }
+                }
+            });
+        });
+
+        node.dependencies.stacks.as_ref().map_or((), |projects| {
+            projects.iter().for_each(|project| {
+                let s_fqn = format!("{}.{}.{}", stack_name, "stack".to_string(), project);
+                match self.incoming_edges.get_mut(project) {
+                    Some(edges) => {
+                        edges.push(node.fqn.clone());
+                    }
+                    None => {
+                        let mut edges = Vec::new();
+                        edges.push(node.fqn.clone());
+                        self.incoming_edges.insert(s_fqn.clone(), edges);
+                    }
+                }
+            });
+        });
     }
 }
 
@@ -218,7 +268,7 @@ impl Resolver {
             version,
             tf_version,
             helm_version,
-            git_sha
+            git_sha,
         );
 
         self.walk_yaml(&mut graph, &yaml);
@@ -264,15 +314,16 @@ impl Resolver {
         &self,
         stack_name: &str,
         stack_kind_name: &str,
-        name: &str,
+        node_name: &str,
+        service_name: &str,
         artifact_path: PathBuf,
     ) -> Result<DependencyNode, Box<dyn Error>> {
         let services_path = artifact_path.join("services");
-        let service_path = services_path.join(name);
+        let service_path = services_path.join(service_name);
         let torb_yaml_path = service_path.join("torb.yaml");
         let torb_yaml = std::fs::read_to_string(torb_yaml_path)?;
         let mut node: DependencyNode = serde_yaml::from_str(torb_yaml.as_str())?;
-        node.fqn = format!("{}-{}-{}", stack_name, stack_kind_name, name);
+        node.fqn = format!("{}.{}.{}", stack_name, stack_kind_name, node_name);
 
         Ok(node)
     }
@@ -281,15 +332,16 @@ impl Resolver {
         &self,
         stack_name: &str,
         stack_kind_name: &str,
-        name: &str,
+        node_name: &str,
+        project_name: &str,
         artifact_path: PathBuf,
     ) -> Result<DependencyNode, Box<dyn Error>> {
         let services_path = artifact_path.join("projects");
-        let service_path = services_path.join(name);
+        let service_path = services_path.join(project_name);
         let torb_yaml_path = service_path.join("torb.yaml");
         let torb_yaml = std::fs::read_to_string(torb_yaml_path)?;
         let mut node: DependencyNode = serde_yaml::from_str(torb_yaml.as_str())?;
-        node.fqn = format!("{}-{}-{}", stack_name, stack_kind_name, name);
+        node.fqn = format!("{}.{}.{}", stack_name, stack_kind_name, node_name);
 
         Ok(node)
     }
@@ -315,56 +367,60 @@ impl Resolver {
             Some(graph),
             DependencyNodeDependencies::new(),
         );
-        node.fqn = format!("{}-{}-{}", stack_name, stack_kind_name, name);
+        node.fqn = format!("{}.{}.{}", stack_name, stack_kind_name, name);
 
         Ok(node)
     }
+
 
     fn resolve_node(
         &self,
         stack_name: &str,
         stack_kind_name: &str,
-        node_type: &str,
+        node_name: &str,
         yaml: serde_yaml::Value,
     ) -> Result<DependencyNode, Box<dyn Error>> {
         let err = TorbResolverErrors::CannotParseStackManifest;
         let home_dir = dirs::home_dir().unwrap();
         let torb_path = home_dir.join(".torb");
         let artifacts_path = torb_path.join("torb-artifacts");
-        let mut node = match node_type {
+        let mut node = match stack_kind_name {
             "service" => {
                 let service_name = yaml.get("service").ok_or(err)?.as_str().unwrap();
-                self.resolve_service(stack_name, stack_kind_name, service_name, artifacts_path)
+                self.resolve_service(stack_name, stack_kind_name, node_name, service_name, artifacts_path)
             }
             "project" => {
                 let project_name = yaml.get("project").ok_or(err)?.as_str().unwrap();
-                self.resolve_project(stack_name, stack_kind_name, project_name, artifacts_path)
+                self.resolve_project(stack_name, stack_kind_name, node_name, project_name, artifacts_path)
             }
-            "stack" => {
-                let local_stack_name = yaml.get("project").ok_or(err)?.as_str().unwrap();
-                self.resolve_stack(stack_name, stack_kind_name, local_stack_name, artifacts_path)
-            }
-            _ => {
-                return Err(Box::new(err))
-            }
+            // TODO(Ian): Revisit nested stacks after MVP.
+            // "stack" => {
+            //     let local_stack_name = yaml.get("project").ok_or(err)?.as_str().unwrap();
+            //     self.resolve_stack(
+            //         stack_name,
+            //         stack_kind_name,
+            //         local_stack_name,
+            //         artifacts_path,
+            //     )
+            // }
+            _ => return Err(Box::new(err)),
         }?;
         let dep_values = yaml.get("deps");
         match dep_values {
             Some(deps) => {
                 let yaml_str = serde_yaml::to_string(deps)?;
-                let deps: DependencyNodeDependencies = serde_yaml::from_str(yaml_str.as_str()).unwrap();
+                let deps: DependencyNodeDependencies =
+                    serde_yaml::from_str(yaml_str.as_str()).unwrap();
                 node.dependencies = deps;
 
                 Ok(node)
             }
-            None => {
-                return Ok(node)
-            }
+            None => return Ok(node),
         }
     }
 
     fn walk_yaml(&self, graph: &mut StackGraph, yaml: &serde_yaml::Value) {
-        // walk yaml and add to graph
+        // Walk yaml and add nodes to graph
         for (key, value) in yaml.as_mapping().unwrap().iter() {
             let key_string = key.as_str().unwrap();
             match key_string {
@@ -374,9 +430,16 @@ impl Resolver {
                         let stack_name = self.config.stack_name.clone();
                         let service_value = service_value.clone();
                         let service_node = self
-                            .resolve_node(stack_name.as_str(), stack_service_name, "service", service_value)
+                            .resolve_node(
+                                stack_name.as_str(),
+                                "service",
+                                stack_service_name,
+                                service_value,
+                            )
                             .unwrap();
+                            
                         graph.add_service(&service_node);
+                        graph.add_all_incoming_edges_downstream(stack_name.clone(), &service_node);
                     }
                 }
                 "projects" => {
@@ -385,21 +448,35 @@ impl Resolver {
                         let stack_name = self.config.stack_name.clone();
                         let project_value = project_value.clone();
                         let project_node = self
-                            .resolve_node(stack_name.as_str(), project_name, "project", project_value)
+                            .resolve_node(
+                                stack_name.as_str(),
+                                "project",
+                                project_name,
+                                project_value,
+                            )
                             .unwrap();
                         graph.add_project(&project_node);
+                        graph.add_all_incoming_edges_downstream(stack_name.clone(), &project_node);
                     }
                 }
-                "stacks" => {
-                    for (stack_name, stack_value) in value.as_mapping().unwrap().iter() {
-                        let global_stack_name = self.config.stack_name.clone();
-                        let local_stack_name = stack_name.as_str().unwrap();
-                        let stack_value = stack_value.clone();
-                        let stack_node =
-                            self.resolve_node(global_stack_name.as_str(), local_stack_name, "stack", stack_value).unwrap();
-                        graph.add_stack(&stack_node);
-                    }
-                }
+                // TODO(Ian): Revist nested stacks after MVP is done.
+                // "stacks" => {
+                //     for (stack_name, stack_value) in value.as_mapping().unwrap().iter() {
+                //         let global_stack_name = self.config.stack_name.clone();
+                //         let local_stack_name = stack_name.as_str().unwrap();
+                //         let stack_value = stack_value.clone();
+                //         let stack_node = self
+                //             .resolve_node(
+                //                 global_stack_name.as_str(),
+                //                 "stack",
+                //                 local_stack_name,
+                //                 stack_value,
+                //             )
+                //             .unwrap();
+                //         graph.add_stack(&stack_node);
+                //         graph.add_all_incoming_edges_downstream(global_stack_name.clone(), &stack_node);
+                //     }
+                // }
                 _ => {}
             }
         }
