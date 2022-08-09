@@ -9,7 +9,9 @@ use ureq;
 mod resolver;
 use resolver::{Resolver, ResolverConfig, StackGraph};
 mod artifacts;
-use artifacts::{write_build_file};
+use artifacts::{write_build_file, ArtifactRepr};
+mod builder;
+use builder::{StackBuilder};
 
 const VERSION: &'static str = env!("CARGO_PKG_VERSION");
 
@@ -60,7 +62,7 @@ fn init() {
     }
 }
 
-fn resolve_yaml(stack_yaml: &String) -> Result<StackGraph, Box<dyn std::error::Error>> {
+fn resolve_stack(stack_yaml: &String) -> Result<StackGraph, Box<dyn std::error::Error>> {
     let stack_def_yaml: serde_yaml::Value = serde_yaml::from_str(stack_yaml).unwrap();
     let stack_name = stack_def_yaml.get("name").unwrap().as_str().unwrap();
     let stack_description = stack_def_yaml.get("description").unwrap().as_str().unwrap();
@@ -75,6 +77,11 @@ fn resolve_yaml(stack_yaml: &String) -> Result<StackGraph, Box<dyn std::error::E
     let resolver = Resolver::new(&resolver_conf);
 
     resolver.resolve()
+}
+
+fn build_stack(build_artifact: ArtifactRepr, dryrun: bool) -> Result<(), Box<dyn std::error::Error>> {
+    let mut stack_builder = StackBuilder::new();
+    stack_builder.build_stack(&build_artifact, dryrun)
 }
 
 fn update_artifacts() {
@@ -135,6 +142,12 @@ fn main() {
                         .short('s')
                         .takes_value(true)
                         .help("Name of the stack to build."),
+                )
+                .arg(
+                    Arg::new("--dryrun")
+                        .short('d')
+                        .takes_value(false)
+                        .help("Dry run. Don't actually build the stack."),
                 ),
         )
         .subcommand(SubCommand::with_name("list-stacks").about("List all available stacks."));
@@ -150,13 +163,20 @@ fn main() {
                 .subcommand_matches("build-stack")
                 .unwrap()
                 .value_of("--stack-name");
+            
+            let dryrun_option = cli_matches
+                .subcommand_matches("build-stack")
+                .unwrap()
+                .value_of("--dryrun");
 
             if let Some(stack_name) = stack_name_option {
                 println!("Attempting to pull and build stack: {}", stack_name);
                 let stack_yaml: String = pull_stack(stack_name, false)
                     .expect("Failed to pull stack from torb-artifacts.");
-                let graph = resolve_yaml(&stack_yaml).unwrap();
-                write_build_file(graph);
+                let graph = resolve_stack(&stack_yaml).unwrap();
+                let (build_filename, build_artifact) = write_build_file(graph);
+
+                build_stack(build_artifact, dryrun_option.is_some()).unwrap()
             }
         }
         Some("list-stacks") => {

@@ -53,19 +53,19 @@ impl ResolverConfig {
 //     tool_name: String,
 //     tool_config: HashMap<String, String>,
 // }
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct BuildStep {
     dockerfile: String,
     registry: String,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct StackConfig {
     pub meta: String,
     pub ingress: bool,
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct DependencyNode {
     pub version: String,
     pub kind: String,
@@ -74,12 +74,15 @@ pub struct DependencyNode {
     pub deploy_steps: HashMap<String, Option<HashMap<String, String>>>,
     #[serde(rename(deserialize = "build"))]
     pub build_step: Option<BuildStep>,
+    pub params: Vec<String>,
     #[serde(skip)]
     pub stack_graph: Option<StackGraph>,
     #[serde(skip)]
     pub dependencies: DependencyNodeDependencies,
     #[serde(skip)]
     pub fqn: String,
+    #[serde(skip)]
+    pub file_path: String,
 }
 
 impl DependencyNode {
@@ -87,26 +90,30 @@ impl DependencyNode {
         name: String,
         deploy_steps: HashMap<String, Option<HashMap<String, String>>>,
         build_step: Option<BuildStep>,
+        params: Vec<String>,
         version: String,
         kind: String,
         stack_graph: Option<StackGraph>,
         dependencies: DependencyNodeDependencies,
+        file_path: String,
     ) -> DependencyNode {
         let fqn = "".to_string();
         DependencyNode {
             name,
             deploy_steps: deploy_steps,
             build_step: build_step,
+            params: params,
             version,
             kind,
             stack_graph,
             dependencies,
             fqn,
+            file_path,
         }
     }
 }
 
-#[derive(Serialize, Deserialize, Default, Clone)]
+#[derive(Serialize, Deserialize, Default, Clone, Debug)]
 pub struct DependencyNodeDependencies {
     pub services: Option<Vec<String>>,
     pub projects: Option<Vec<String>>,
@@ -123,7 +130,7 @@ impl DependencyNodeDependencies {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct StackGraph {
     pub stack_config: StackConfig,
     pub services: HashMap<String, DependencyNode>,
@@ -135,6 +142,7 @@ pub struct StackGraph {
     pub commit: String,
     pub tf_version: String,
     pub helm_version: String,
+    pub meta: Box<Option<DependencyNode>>,
     pub incoming_edges: HashMap<String, Vec<String>>,
 }
 
@@ -147,6 +155,7 @@ impl StackGraph {
         commit: String,
         tf_version: String,
         helm_version: String,
+        meta: Box<Option<DependencyNode>>,
     ) -> StackGraph {
         StackGraph {
             services: HashMap::<String, DependencyNode>::new(),
@@ -159,6 +168,7 @@ impl StackGraph {
             tf_version,
             helm_version,
             commit,
+            meta,
             incoming_edges: HashMap::<String, Vec<String>>::new(),
         }
     }
@@ -174,7 +184,9 @@ impl StackGraph {
     }
 
     pub fn add_all_incoming_edges_downstream(&mut self, stack_name: String, node: &DependencyNode) {
-        self.incoming_edges.entry(node.fqn.clone()).or_insert(Vec::<String>::new());
+        self.incoming_edges
+            .entry(node.fqn.clone())
+            .or_insert(Vec::<String>::new());
 
         node.dependencies.projects.as_ref().map_or((), |projects| {
             projects.iter().for_each(|project| {
@@ -240,27 +252,41 @@ impl Resolver {
     }
 
     pub fn resolve(&self) -> Result<StackGraph, Box<dyn Error>> {
+        println!("Resolving stack graph...");
         let yaml = self.stack.clone();
         let graph = self.build_graph(yaml)?;
 
         Ok(graph)
     }
 
+    fn resolve_meta(&self, meta_file: &str) -> Result<Box<Option<DependencyNode>>, Box<dyn Error>> {
+        if meta_file != "" {
+            let torb_path = torb_path();
+            let artifacts_path = torb_path.join("torb-artifacts");
+            let meta = self.resolve_stack(&meta_file, "stacks", "META", artifacts_path)?;
+
+            Ok(Box::new(Some(meta)))
+        } else {
+            Ok(Box::new(None))
+        }
+    }
+
     fn build_graph(
         &self,
         yaml: serde_yaml::Value,
     ) -> Result<StackGraph, Box<dyn std::error::Error>> {
-        let meta = serde_yaml::to_string(&yaml["config"]["meta"]).unwrap();
+        let meta_file = yaml["config"]["meta"].as_str().unwrap_or("");
+        let meta = self.resolve_meta(&meta_file)?;
         let name = yaml["name"].as_str().unwrap().to_string();
         let version = yaml["version"].as_str().unwrap().to_string();
         let kind = yaml["kind"].as_str().unwrap().to_string();
-        let ingress = yaml["config"]["ingress"].as_bool().unwrap();
+        let ingress = yaml["config"]["ingress"].as_bool().unwrap_or(false);
         let tf_version = self.get_tf_version();
         let helm_version = self.get_helm_version();
         let git_sha = self.get_commit_sha();
         let mut graph = StackGraph::new(
             StackConfig {
-                meta: meta,
+                meta: meta_file.to_string(),
                 ingress: ingress,
             },
             name,
@@ -269,6 +295,7 @@ impl Resolver {
             tf_version,
             helm_version,
             git_sha,
+            meta,
         );
 
         self.walk_yaml(&mut graph, &yaml);
@@ -321,9 +348,14 @@ impl Resolver {
         let services_path = artifact_path.join("services");
         let service_path = services_path.join(service_name);
         let torb_yaml_path = service_path.join("torb.yaml");
-        let torb_yaml = std::fs::read_to_string(torb_yaml_path)?;
+        let torb_yaml = std::fs::read_to_string(&torb_yaml_path)?;
         let mut node: DependencyNode = serde_yaml::from_str(torb_yaml.as_str())?;
+        let node_fp = torb_yaml_path
+            .to_str()
+            .ok_or("Could not convert path to string.")?
+            .to_string();
         node.fqn = format!("{}.{}.{}", stack_name, stack_kind_name, node_name);
+        node.file_path = node_fp;
 
         Ok(node)
     }
@@ -336,12 +368,17 @@ impl Resolver {
         project_name: &str,
         artifact_path: PathBuf,
     ) -> Result<DependencyNode, Box<dyn Error>> {
-        let services_path = artifact_path.join("projects");
-        let service_path = services_path.join(project_name);
-        let torb_yaml_path = service_path.join("torb.yaml");
-        let torb_yaml = std::fs::read_to_string(torb_yaml_path)?;
+        let projects_path = artifact_path.join("projects");
+        let project_path = projects_path.join(project_name);
+        let torb_yaml_path = project_path.join("torb.yaml");
+        let torb_yaml = std::fs::read_to_string(&torb_yaml_path)?;
         let mut node: DependencyNode = serde_yaml::from_str(torb_yaml.as_str())?;
+        let node_fp = torb_yaml_path
+            .to_str()
+            .ok_or("Could not convert path to string.")?
+            .to_string();
         node.fqn = format!("{}.{}.{}", stack_name, stack_kind_name, node_name);
+        node.file_path = node_fp;
 
         Ok(node)
     }
@@ -354,24 +391,27 @@ impl Resolver {
         artifact_path: PathBuf,
     ) -> Result<DependencyNode, Box<dyn Error>> {
         let stack_path = artifact_path.join("stacks");
-        let stack_yaml_path = stack_path.join(format!("{}.yaml", name));
-        let torb_yaml = std::fs::read_to_string(stack_yaml_path)?;
-
+        let stack_yaml_path = stack_path.join(format!("{}.yaml", stack_name));
+        let torb_yaml = std::fs::read_to_string(&stack_yaml_path)?;
         let graph = self.build_graph(serde_yaml::from_str(torb_yaml.as_str())?)?;
         let mut node = DependencyNode::new(
             graph.name.clone(),
             HashMap::<String, Option<HashMap<String, String>>>::new(),
             None,
+            Vec::<String>::new(),
             graph.version.clone(),
             "stack".to_string(),
             Some(graph),
             DependencyNodeDependencies::new(),
+            stack_yaml_path
+                .to_str()
+                .ok_or("Could not convert path to string.")?
+                .to_string(),
         );
         node.fqn = format!("{}.{}.{}", stack_name, stack_kind_name, name);
 
         Ok(node)
     }
-
 
     fn resolve_node(
         &self,
@@ -387,11 +427,23 @@ impl Resolver {
         let mut node = match stack_kind_name {
             "service" => {
                 let service_name = yaml.get("service").ok_or(err)?.as_str().unwrap();
-                self.resolve_service(stack_name, stack_kind_name, node_name, service_name, artifacts_path)
+                self.resolve_service(
+                    stack_name,
+                    stack_kind_name,
+                    node_name,
+                    service_name,
+                    artifacts_path,
+                )
             }
             "project" => {
                 let project_name = yaml.get("project").ok_or(err)?.as_str().unwrap();
-                self.resolve_project(stack_name, stack_kind_name, node_name, project_name, artifacts_path)
+                self.resolve_project(
+                    stack_name,
+                    stack_kind_name,
+                    node_name,
+                    project_name,
+                    artifacts_path,
+                )
             }
             // TODO(Ian): Revisit nested stacks after MVP.
             // "stack" => {
@@ -437,7 +489,7 @@ impl Resolver {
                                 service_value,
                             )
                             .unwrap();
-                            
+
                         graph.add_service(&service_node);
                         graph.add_all_incoming_edges_downstream(stack_name.clone(), &service_node);
                     }
