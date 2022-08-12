@@ -32,6 +32,9 @@ impl StackBuilder {
     ) -> Result<(), Box<dyn std::error::Error>> {
         println!("Building {} stack...", artifact.stack_name.as_str());
 
+        let out = self.init_tf().expect("Failed to initialize terraform.");
+        println!("{}", std::str::from_utf8(&out.stdout).unwrap());
+
         if artifact.meta.as_ref().is_some() {
             self.build_meta(&artifact.meta, dryrun)?;
         }
@@ -89,8 +92,10 @@ impl StackBuilder {
             .unwrap()
             .join("terraform/");
         println!("Deploying {}", node.fqn);
+        println!("deploy steps: {:?}", node.deploy_steps);
+        println!("tf path: {:?}", &tf_path);
         let helm_config = node.deploy_steps
-            .get(&"helm".to_string()).unwrap();
+            .get(&"helm".to_string()).expect("No helm deploy config key found.");
 
         match helm_config {
             Some(conf) => {
@@ -103,30 +108,43 @@ impl StackBuilder {
         }
     }
 
+    fn init_tf(&self) -> Result<std::process::Output, Box<dyn std::error::Error>> {
+        println!("Initalizing terraform...");
+        let torb_path = torb_path();
+        let artifact_path = torb_path.join("torb-artifacts/");
+        println!("artifact path: {:?}", artifact_path);
+        let mut cmd = Command::new("./terraform");
+        cmd.arg(format!("-chdir={}", artifact_path.to_str().unwrap()));
+        cmd.arg("init");
+        cmd.current_dir(torb_path);
+
+        Ok(cmd.output()?)
+    }
+
     fn deploy_tf(
         &self,
         path: &std::path::PathBuf,
         config: &HashMap<String, String>,
         dryrun: bool,
     ) -> Result<std::process::Output, Box<dyn std::error::Error>> {
+        let torb_path = torb_path();
         let mut cmd = Command::new("./terraform");
+        cmd.arg(format!("-chdir={}", path.to_str().unwrap()));
         cmd.arg("plan").arg("-out=tfplan").arg("-no-color").arg("-detailed-exitcode");
 
         for (key, value) in config.iter() {
             cmd.arg(format!("-var={}={}", key, value));
         }
-        cmd.current_dir(path);
+        cmd.current_dir(torb_path);
         let out = cmd.output()?;
 
         if dryrun {
-            return Ok(out)
+            Ok(out)
         } else {
             let mut cmd = Command::new("./terraform");
             cmd.arg("apply").arg("tfplan");
             cmd.current_dir(path);
-            let out = cmd.output()?;
+            Ok(cmd.output()?)
         }
-
-        Ok(out)
     }
 }
