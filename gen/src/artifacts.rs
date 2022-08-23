@@ -6,13 +6,7 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
-
-const TORB_PATH: &str = ".torb";
-
-fn torb_path() -> std::path::PathBuf {
-    let home_dir = dirs::home_dir().expect("Failed to get home directory");
-    home_dir.join(TORB_PATH)
-}
+use crate::utils::{torb_path};
 
 #[derive(Serialize, Deserialize)]
 pub struct ArtifactNodeRepr {
@@ -171,7 +165,7 @@ fn walk_nodes(node: &DependencyNode, graph: &StackGraph) -> ArtifactNodeRepr {
     return artifact_node;
 }
 
-pub fn write_build_file(graph: StackGraph) -> (String, ArtifactRepr) {
+pub fn write_build_file(graph: StackGraph) -> (String, String, ArtifactRepr) {
     println!("Creating build file...");
     let artifact = walk_graph(&graph).unwrap();
     let string_rep = serde_yaml::to_string(&artifact).unwrap();
@@ -185,10 +179,11 @@ pub fn write_build_file(graph: StackGraph) -> (String, ArtifactRepr) {
     if !outfile_dir_path.is_dir() {
         fs::create_dir(&outfile_dir_path).expect("Failed to create buildfile directory.");
     };
+
     println!("Writing buildfile to {}", outfile_path.display());
     fs::File::create(outfile_path)
         .and_then(|mut f| f.write(&string_rep.as_bytes()))
         .expect("Failed to create buildfile.");
 
-    (filename, artifact)
+    (hash_base64, filename, artifact)
 }

@@ -3,13 +3,8 @@ use serde_yaml::{self, Value};
 use std::process::Command;
 use std::{collections::HashMap, error::Error, path::PathBuf};
 use thiserror::Error;
+use crate::utils::{normalize_name, torb_path};
 
-const TORB_PATH: &str = ".torb";
-
-fn torb_path() -> std::path::PathBuf {
-    let home_dir = dirs::home_dir().unwrap();
-    home_dir.join(TORB_PATH)
-}
 
 #[derive(Error, Debug)]
 pub enum TorbResolverErrors {
@@ -277,7 +272,9 @@ impl Resolver {
     ) -> Result<StackGraph, Box<dyn std::error::Error>> {
         let meta_file = yaml["config"]["meta"].as_str().unwrap_or("");
         let meta = self.resolve_meta(&meta_file)?;
-        let name = yaml["name"].as_str().unwrap().to_string();
+        let mut name = yaml["name"].as_str().unwrap().to_string();
+        name = normalize_name(&name);
+
         let version = yaml["version"].as_str().unwrap().to_string();
         let kind = yaml["kind"].as_str().unwrap().to_string();
         let ingress = yaml["config"]["ingress"].as_bool().unwrap_or(false);

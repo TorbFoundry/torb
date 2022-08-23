@@ -6,12 +6,15 @@ use std::io;
 use std::path::Path;
 use std::process::Command;
 use thiserror::Error;
+use crate::utils::{torb_path};
 
-const TORB_PATH: &str = ".torb";
-
-fn torb_path() -> std::path::PathBuf {
-    let home_dir = dirs::home_dir().unwrap();
-    home_dir.join(TORB_PATH)
+#[derive(Error, Debug)]
+pub enum TorbBuilderErrors {
+    #[error("Command `{command:?}` failed with response: {response}")]
+    FailedToPlan {
+        command: std::process::Command,
+        response: String,
+    },
 }
 
 pub struct StackBuilder {
@@ -28,7 +31,7 @@ impl StackBuilder {
     pub fn build_stack(
         &mut self,
         artifact: &ArtifactRepr,
-        dryrun: bool
+        dryrun: bool,
     ) -> Result<(), Box<dyn std::error::Error>> {
         println!("Building {} stack...", artifact.stack_name.as_str());
 
@@ -48,7 +51,7 @@ impl StackBuilder {
     fn build_meta(
         &mut self,
         meta_stack: &Box<Option<ArtifactRepr>>,
-        dryrun: bool
+        dryrun: bool,
     ) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(meta) = meta_stack.as_ref() {
             self.build_stack(meta, dryrun)?;
@@ -60,7 +63,7 @@ impl StackBuilder {
     fn walk_build_path(
         &mut self,
         node: &ArtifactNodeRepr,
-        dryrun: bool
+        dryrun: bool,
     ) -> Result<(), Box<dyn std::error::Error>> {
         // We want to walk to the end of the dependencies before we build.
         for child in node.dependencies.iter() {
@@ -83,7 +86,11 @@ impl StackBuilder {
         Ok(())
     }
 
-    fn build_node(&self, node: &ArtifactNodeRepr, dryrun: bool) -> Result<std::process::Output, Box<dyn std::error::Error>> {
+    fn build_node(
+        &self,
+        node: &ArtifactNodeRepr,
+        dryrun: bool,
+    ) -> Result<std::process::Output, Box<dyn std::error::Error>> {
         if node.build_step.is_some() {
             println!("Building {}", node.fqn);
         }
@@ -94,15 +101,18 @@ impl StackBuilder {
         println!("Deploying {}", node.fqn);
         println!("deploy steps: {:?}", node.deploy_steps);
         println!("tf path: {:?}", &tf_path);
-        let helm_config = node.deploy_steps
-            .get(&"helm".to_string()).expect("No helm deploy config key found.");
+        let helm_config = node
+            .deploy_steps
+            .get(&"helm".to_string())
+            .expect("No helm deploy config key found.");
 
         match helm_config {
-            Some(conf) => {
-                self.deploy_tf(&tf_path, conf, dryrun)
-            },
+            Some(conf) => self.deploy_tf(&tf_path, conf, dryrun),
             None => {
-                println!("No helm configuration found for {}... trying to deploy...", node.fqn);
+                println!(
+                    "No helm configuration found for {}... trying to deploy...",
+                    node.fqn
+                );
                 self.deploy_tf(&tf_path, &HashMap::<String, String>::new(), dryrun)
             }
         }
@@ -130,13 +140,26 @@ impl StackBuilder {
         let torb_path = torb_path();
         let mut cmd = Command::new("./terraform");
         cmd.arg(format!("-chdir={}", path.to_str().unwrap()));
-        cmd.arg("plan").arg("-out=tfplan").arg("-no-color").arg("-detailed-exitcode");
+        cmd.arg("plan")
+            .arg("-out=tfplan")
+            .arg("-no-color")
+            .arg("-detailed-exitcode");
 
         for (key, value) in config.iter() {
             cmd.arg(format!("-var={}={}", key, value));
         }
         cmd.current_dir(torb_path);
         let out = cmd.output()?;
+
+        if !out.status.success() {
+            let err_resp = std::str::from_utf8(&out.stderr).unwrap();
+            let err = TorbBuilderErrors::FailedToPlan {
+                command: cmd,
+                response: err_resp.to_string(),
+            };
+
+            return Err(Box::new(err));
+        }
 
         if dryrun {
             Ok(out)

@@ -1,3 +1,9 @@
+mod utils;
+mod artifacts;
+mod resolver;
+mod composer;
+mod builder;
+
 use clap::{App, Arg, SubCommand};
 use dirs;
 use std::fs;
@@ -6,12 +12,11 @@ use std::io;
 use std::process::Command;
 use thiserror::Error;
 use ureq;
-mod resolver;
 use resolver::{Resolver, ResolverConfig, StackGraph};
-mod artifacts;
 use artifacts::{write_build_file, ArtifactRepr};
-mod builder;
 use builder::{StackBuilder};
+use composer::{Composer};
+use utils::{torb_path, normalize_name};
 
 const VERSION: &'static str = env!("CARGO_PKG_VERSION");
 
@@ -23,18 +28,14 @@ pub enum TorbCliErrors {
     StackMetaNotFound,
 }
 
-const TORB_PATH: &str = ".torb";
-
-fn torb_path() -> std::path::PathBuf {
-    let home_dir = dirs::home_dir().unwrap();
-    home_dir.join(TORB_PATH)
-}
-
 fn init() {
+    println!("Initializing...");
     let torb_path_buf = torb_path();
     let torb_path = torb_path_buf.as_path();
     if !torb_path.is_dir() {
+        println!("Creating {}...", torb_path.display());
         fs::create_dir(&torb_path).unwrap();
+        println!("Cloning build artifacts...");
         let _clone_cmd_out = Command::new("git")
             .arg("clone")
             .arg("git@github.com:TorbFoundry/torb-artifacts.git")
@@ -43,8 +44,16 @@ fn init() {
             .expect("Failed to clone torb-artifacts");
     };
 
+    let environments_path = torb_path.join("environments");
+
+    if !environments_path.is_dir() {
+        println!("Creating empty environment dir...",);
+        fs::create_dir(&environments_path).unwrap();
+    }
+
     let tf_path = torb_path.join("terraform.zip");
     if !tf_path.is_file() {
+        println!("Downloading terraform...");
         let resp = ureq::get(
             "https://releases.hashicorp.com/terraform/1.2.5/terraform_1.2.5_linux_amd64.zip",
         )
@@ -60,6 +69,7 @@ fn init() {
             .output()
             .expect("Failed to unzip terraform.");
     }
+    println!("Finished!")
 }
 
 fn resolve_stack(stack_yaml: &String) -> Result<StackGraph, Box<dyn std::error::Error>> {
@@ -68,7 +78,7 @@ fn resolve_stack(stack_yaml: &String) -> Result<StackGraph, Box<dyn std::error::
     let stack_description = stack_def_yaml.get("description").unwrap().as_str().unwrap();
     let resolver_conf = ResolverConfig::new(
         false,
-        stack_name.to_string(),
+        normalize_name(stack_name),
         stack_description.to_string(),
         stack_def_yaml.clone(),
         VERSION.to_string(),
@@ -82,6 +92,11 @@ fn resolve_stack(stack_yaml: &String) -> Result<StackGraph, Box<dyn std::error::
 fn build_stack(build_artifact: ArtifactRepr, dryrun: bool) -> Result<(), Box<dyn std::error::Error>> {
     let mut stack_builder = StackBuilder::new();
     stack_builder.build_stack(&build_artifact, dryrun)
+}
+
+fn compose_build_environment(build_hash: String, build_artifact: &ArtifactRepr) {
+    let mut composer = Composer::new(build_hash);
+    composer.compose(build_artifact).unwrap();
 }
 
 fn update_artifacts() {
@@ -174,9 +189,12 @@ fn main() {
                 let stack_yaml: String = pull_stack(stack_name, false)
                     .expect("Failed to pull stack from torb-artifacts.");
                 let graph = resolve_stack(&stack_yaml).unwrap();
-                let (build_filename, build_artifact) = write_build_file(graph);
 
-                build_stack(build_artifact, dryrun_option.is_some()).unwrap()
+                let (build_hash, build_filename, build_artifact) = write_build_file(graph);
+
+                compose_build_environment(build_hash, &build_artifact);
+
+                //build_stack(build_artifact, dryrun_option.is_some()).unwrap()
             }
         }
         Some("list-stacks") => {
