@@ -1,5 +1,6 @@
 use crate::artifacts::{ArtifactNodeRepr, ArtifactRepr};
 use crate::utils::torb_path;
+use hcl::{Block, Body, Expression};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{self, Write};
@@ -12,30 +13,13 @@ use thiserror::Error;
 pub enum TorbComposerErrors {
     #[error("Environments folder not found. Please make sure Torb is correctly initialized.")]
     EnvironmentsNotFound,
-    #[error("Attempted to add module to TFMain before TFMain was created.")]
-    TFMainNotInitialized,
-}
-
-struct TFModule {
-    name: String,
-    source: String,
-    version: Option<String>,
-    release_name: String,
-    chart_name: String,
-    repository: String,
-    namespace: String,
-    values: String,
-}
-
-struct TFMain {
-    modules: Vec<TFModule>,
 }
 
 pub struct Composer {
     hash: String,
     build_files_seen: HashSet<String>,
     fqn_seen: HashSet<String>,
-    main_struct: Option<TFMain>,
+    main_struct: hcl::BodyBuilder,
 }
 
 impl Composer {
@@ -44,7 +28,7 @@ impl Composer {
             hash: hash,
             build_files_seen: HashSet::new(),
             fqn_seen: HashSet::new(),
-            main_struct: None,
+            main_struct: Body::builder(),
         }
     }
 
@@ -64,57 +48,56 @@ impl Composer {
             self.walk_artifact(node)?;
         }
 
-        self.write_main_buildfile()?;
+        self.copy_supporting_build_files()
+            .expect("Failed to write supporting buildfiles to new environment.");
+
+        self.write_main_buildfile()
+            .expect("Failed to write main buildfile to new environment.");
 
         Ok(())
     }
 
-    fn hashmap_from_tf_module(&self, module: &TFModule) -> HashMap<String, String> {
-        let mut map = HashMap::new();
-        map.insert("name".to_string(), module.name.clone());
-        map.insert("source".to_string(), module.source.clone());
-        map.insert(
-            "version".to_string(),
-            module.version.clone().unwrap_or("".to_string()),
-        );
-        map.insert("release_name".to_string(), module.release_name.clone());
-        map.insert("chart_name".to_string(), module.chart_name.clone());
-        map.insert("repository".to_string(), module.repository.clone());
-        map.insert("namespace".to_string(), module.namespace.clone());
-        map.insert("values".to_string(), module.values.clone());
-        return map;
+    fn copy_supporting_build_files(&self) -> Result<(), Box<dyn std::error::Error>> {
+        let path = torb_path();
+        let supporting_build_files_path = path.join("torb-artifacts/terraform");
+        let new_environment_path = torb_path().join("environments").join(&self.hash);
+        let dest = new_environment_path.join(supporting_build_files_path.as_path().file_name().unwrap());
+
+        fs::create_dir(dest.clone()).expect("Unable to create supporting buildfile directory at destination, please check torb has been initialized properly.");
+
+        self._copy_files_recursively(supporting_build_files_path, dest);
+
+        Ok(())
+    }
+
+    fn _copy_files_recursively(&self, path: std::path::PathBuf, dest: std::path::PathBuf) -> () {
+        for entry in path.read_dir().expect("Failed reading torb-artifacts terraform dir. Please check that torb is correctly initialized.") {
+            let entry = entry.expect("Failed reading entry in torb-artifacts terraform dir. Please check that torb is correctly initialized.");
+            if entry.path().is_dir() {
+                let new_dest = dest.join(entry.path().file_name().unwrap());
+                fs::create_dir(new_dest.clone()).expect("Unable to create supporting buildfile directory at destination, please check torb has been initialized properly.");
+                self._copy_files_recursively(entry.path(), new_dest.clone())
+            } else {
+                let path = entry.path();
+                println!("Copying {} to {}", path.display(), dest.display());
+                let new_path = dest.join(path.file_name().unwrap());
+                fs::copy(path, new_path).expect("Failed to copy supporting build file.");
+            }
+        }
     }
 
     fn write_main_buildfile(&mut self) -> Result<std::path::PathBuf, Box<dyn std::error::Error>> {
+        let builder = std::mem::take(&mut self.main_struct);
         let environment_path = torb_path().join("environments").join(&self.hash);
         let main_tf_path = environment_path.join("main.tf");
-        let mut main_tf_content =
-            HashMap::<String, &HashMap<String, HashMap<String, String>>>::new();
-        let mut modules = HashMap::<String, HashMap<String, String>>::new();
-        for module_struct in self.main_struct.as_ref().unwrap().modules.iter() {
-            let module = self.hashmap_from_tf_module(module_struct.clone());
-            modules.insert(module_struct.name.clone(), module);
-        }
-        main_tf_content.insert("module".to_string(), &modules);
 
-        let main_tf_content_json = serde_json::to_string(&main_tf_content).unwrap();
-        let mut tempfile = NamedTempFile::new()?;
+        let built_content = builder.build();
 
-        tempfile.write_all(main_tf_content_json.as_bytes()).unwrap();
+        let main_tf_content_hcl_string = hcl::to_string(&built_content)?;
 
-        let temp_path = tempfile.into_temp_path();
+        println!("{}", main_tf_content_hcl_string);
 
-        let torb_path = torb_path();
-
-        let mut command = Command::new("json2hcl");
-        command
-            .current_dir(torb_path)
-            .arg(temp_path.to_str().unwrap());
-
-        let output = command.output()?;
-        let stdout = String::from_utf8(output.stdout).unwrap();
-
-        fs::write(&main_tf_path, stdout).unwrap();
+        fs::write(&main_tf_path, main_tf_content_hcl_string).expect("Failed to write main.tf");
 
         Ok(main_tf_path)
     }
@@ -125,8 +108,10 @@ impl Composer {
             self.walk_artifact(child)?
         }
 
+        println!("Composing {}...", node.name);
+
         if !self.build_files_seen.contains(&node.name) {
-            self.copy_build_files(&node).and_then(|_out| {
+            self.copy_build_files_for_node(&node).and_then(|_out| {
                 if self.build_files_seen.insert(node.name.clone()) {
                     Ok(())
                 } else {
@@ -137,6 +122,8 @@ impl Composer {
                 }
             })?;
         }
+
+        println!("Build file copying done.");
 
         if !self.fqn_seen.contains(&node.fqn) {
             self.add_to_main_struct(node).and_then(|_out| {
@@ -154,7 +141,7 @@ impl Composer {
         Ok(())
     }
 
-    fn copy_build_files(
+    fn copy_build_files_for_node(
         &mut self,
         node: &ArtifactNodeRepr,
     ) -> Result<bool, Box<dyn std::error::Error>> {
@@ -197,23 +184,49 @@ impl Composer {
             .join(&self.hash)
             .join(&node.name);
         let name = node.fqn.clone().replace(".", "_");
-        let module = TFModule {
-            name: name.clone(),
-            source: source.to_str().unwrap().to_string(),
-            version: None,
-            release_name: node.deploy_steps["helm"].clone().unwrap()["release_name"].clone(),
-            chart_name: node.deploy_steps["helm"].clone().unwrap()["chart_name"].clone(),
-            repository: node.deploy_steps["helm"].clone().unwrap()["repository"].clone(),
-            namespace: node.deploy_steps["helm"].clone().unwrap()["namespace"].clone(),
-            values: "".to_string(),
-        };
+        let namespace = node.fqn.split(".").next().unwrap().to_string();
 
-        if self.main_struct.is_none() {
-            Err(Box::new(TorbComposerErrors::TFMainNotInitialized))
-        } else {
-            let main_struct = self.main_struct.as_mut().unwrap();
-            main_struct.modules.push(module);
-            Ok(())
-        }
+        let attributes = vec![
+            ("source", source.to_str().unwrap().to_string()),
+            (
+                "version",
+                node.deploy_steps["helm"]
+                    .clone()
+                    .unwrap()
+                    .get("version")
+                    .unwrap_or(&"".to_string())
+                    .clone(),
+            ),
+            (
+                "release_name",
+                node.deploy_steps["helm"]
+                    .clone()
+                    .unwrap()
+                    .get("release_name")
+                    .unwrap_or(&"".to_string())
+                    .clone(),
+            ),
+            (
+                "chart_name",
+                node.deploy_steps["helm"].clone().unwrap()["chart"].clone(),
+            ),
+            (
+                "repository",
+                node.deploy_steps["helm"].clone().unwrap()["repository"].clone(),
+            ),
+            ("namespace", namespace),
+            ("values", "".to_string()),
+        ];
+
+        let builder = std::mem::take(&mut self.main_struct);
+
+        self.main_struct = builder.add_block(
+            Block::builder("module")
+                .add_label(&name)
+                .add_attributes(attributes)
+                .build(),
+        );
+
+        Ok(())
     }
 }

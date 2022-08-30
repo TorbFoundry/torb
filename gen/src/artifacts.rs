@@ -8,7 +8,7 @@ use std::fs;
 use std::io::Write;
 use crate::utils::{torb_path};
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct ArtifactNodeRepr {
     pub fqn: String,
     pub name: String,

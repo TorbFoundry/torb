@@ -52,7 +52,8 @@ fn init() {
     }
 
     let tf_path = torb_path.join("terraform.zip");
-    if !tf_path.is_file() {
+    let tf_bin_path = torb_path.join("terraform");
+    if !tf_bin_path.is_file() {
         println!("Downloading terraform...");
         let resp = ureq::get(
             "https://releases.hashicorp.com/terraform/1.2.5/terraform_1.2.5_linux_amd64.zip",
@@ -60,15 +61,18 @@ fn init() {
         .call()
         .unwrap();
 
-        let mut out = File::create(tf_path).unwrap();
+        let mut out = File::create(&tf_path).unwrap();
         io::copy(&mut resp.into_reader(), &mut out).expect("Failed to write terraform zip file.");
 
-        let _unzip_cmd_out = Command::new("unzip")
-            .arg(&torb_path.join("terraform.zip"))
-            .current_dir(&torb_path)
-            .output()
-            .expect("Failed to unzip terraform.");
+        let mut unzip_cmd = Command::new("unzip");
+
+        unzip_cmd
+            .arg(&tf_path)
+            .current_dir(&torb_path);
+
+        let _unzip_cmd_out =  unzip_cmd.output().expect("Failed to unzip terraform.");
     }
+
     println!("Finished!")
 }
 
