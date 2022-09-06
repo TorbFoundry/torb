@@ -59,7 +59,7 @@ impl Composer {
 
     fn copy_supporting_build_files(&self) -> Result<(), Box<dyn std::error::Error>> {
         let path = torb_path();
-        let supporting_build_files_path = path.join("torb-artifacts/terraform");
+        let supporting_build_files_path = path.join("torb-artifacts/common");
         let new_environment_path = torb_path().join("environments").join(&self.hash);
         let dest = new_environment_path.join(supporting_build_files_path.as_path().file_name().unwrap());
 
@@ -71,8 +71,10 @@ impl Composer {
     }
 
     fn _copy_files_recursively(&self, path: std::path::PathBuf, dest: std::path::PathBuf) -> () {
-        for entry in path.read_dir().expect("Failed reading torb-artifacts terraform dir. Please check that torb is correctly initialized.") {
-            let entry = entry.expect("Failed reading entry in torb-artifacts terraform dir. Please check that torb is correctly initialized.");
+        let error_string = format!("Failed reading torb-artifacts dir: {}. Please check that torb is correctly initialized.", path.to_str().unwrap());
+        for entry in path.read_dir().expect(&error_string) {
+            let error_string = format!("Failed reading entry in torb-artifacts dir: {}. Please check that torb is correctly initialized.", path.to_str().unwrap());
+            let entry = entry.expect(&error_string);
             if entry.path().is_dir() {
                 let new_dest = dest.join(entry.path().file_name().unwrap());
                 fs::create_dir(new_dest.clone()).expect("Unable to create supporting buildfile directory at destination, please check torb has been initialized properly.");
@@ -178,25 +180,12 @@ impl Composer {
         &mut self,
         node: &ArtifactNodeRepr,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let torb_path = torb_path();
-        let source = torb_path
-            .join("environments")
-            .join(&self.hash)
-            .join(&node.name);
+        let source = format!("./{}", node.name);
         let name = node.fqn.clone().replace(".", "_");
         let namespace = node.fqn.split(".").next().unwrap().to_string();
 
-        let attributes = vec![
-            ("source", source.to_str().unwrap().to_string()),
-            (
-                "version",
-                node.deploy_steps["helm"]
-                    .clone()
-                    .unwrap()
-                    .get("version")
-                    .unwrap_or(&"".to_string())
-                    .clone(),
-            ),
+        let mut attributes = vec![
+            ("source", source),
             (
                 "release_name",
                 node.deploy_steps["helm"]
@@ -217,6 +206,18 @@ impl Composer {
             ("namespace", namespace),
             ("values", "".to_string()),
         ];
+
+
+        let module_version = node.deploy_steps["helm"]
+                .clone()
+                .unwrap()
+                .get("version")
+                .unwrap_or(&"".to_string())
+                .clone();
+
+        if module_version != "" {
+            attributes.push(("version", module_version));
+        }
 
         let builder = std::mem::take(&mut self.main_struct);
 
