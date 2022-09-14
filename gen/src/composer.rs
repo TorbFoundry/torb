@@ -110,8 +110,6 @@ impl Composer {
             self.walk_artifact(child)?
         }
 
-        println!("Composing {}...", node.name);
-
         if !self.build_files_seen.contains(&node.name) {
             self.copy_build_files_for_node(&node).and_then(|_out| {
                 if self.build_files_seen.insert(node.name.clone()) {
@@ -142,6 +140,20 @@ impl Composer {
 
         Ok(())
     }
+
+    // fn generate_output_data_blocks(&self, node: &ArtifactNodeRepr) -> Result<(), Box<dyn std::error::Error>> {
+    //     let mut output_data_blocks = Body::builder();
+
+    //     for output in node.outputs.iter() {
+    //         let output_data_block = Body::builder()
+    //             .add("value", output.value.clone())
+    //             .build();
+
+    //         output_data_blocks.add(output.name.clone(), output_data_block);
+    //     }
+
+    //     Ok(())
+    // }
 
     fn copy_build_files_for_node(
         &mut self,
@@ -182,7 +194,7 @@ impl Composer {
     ) -> Result<(), Box<dyn std::error::Error>> {
         let source = format!("./{}", node.name);
         let name = node.fqn.clone().replace(".", "_");
-        let namespace = node.fqn.split(".").next().unwrap().to_string();
+        let namespace = node.fqn.split(".").next().unwrap().to_string().replace("_", "-");
 
         let mut attributes = vec![
             ("source", source),
@@ -204,7 +216,6 @@ impl Composer {
                 node.deploy_steps["helm"].clone().unwrap()["repository"].clone(),
             ),
             ("namespace", namespace),
-            ("values", "".to_string()),
         ];
 
 
@@ -225,6 +236,7 @@ impl Composer {
             Block::builder("module")
                 .add_label(&name)
                 .add_attributes(attributes)
+                .add_attribute(("values", vec![""]))
                 .build(),
         );
 

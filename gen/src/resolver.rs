@@ -69,7 +69,8 @@ pub struct DependencyNode {
     pub deploy_steps: HashMap<String, Option<HashMap<String, String>>>,
     #[serde(rename(deserialize = "build"))]
     pub build_step: Option<BuildStep>,
-    pub params: Vec<String>,
+    pub inputs: Option<HashMap<String, String>>,
+    pub outputs: Option<HashMap<String, String>>,
     #[serde(skip)]
     pub stack_graph: Option<StackGraph>,
     #[serde(skip)]
@@ -85,7 +86,8 @@ impl DependencyNode {
         name: String,
         deploy_steps: HashMap<String, Option<HashMap<String, String>>>,
         build_step: Option<BuildStep>,
-        params: Vec<String>,
+        inputs: Option<HashMap<String, String>>,
+        outputs: Option<HashMap<String, String>>,
         version: String,
         kind: String,
         stack_graph: Option<StackGraph>,
@@ -97,7 +99,8 @@ impl DependencyNode {
             name,
             deploy_steps: deploy_steps,
             build_step: build_step,
-            params: params,
+            inputs: inputs,
+            outputs: outputs,
             version,
             kind,
             stack_graph,
@@ -395,7 +398,8 @@ impl Resolver {
             graph.name.clone(),
             HashMap::<String, Option<HashMap<String, String>>>::new(),
             None,
-            Vec::<String>::new(),
+            None,
+            None,
             graph.version.clone(),
             "stack".to_string(),
             Some(graph),
@@ -475,6 +479,7 @@ impl Resolver {
             match key_string {
                 "services" => {
                     for (service_name, service_value) in value.as_mapping().unwrap().iter() {
+                        println!("service: {:?}", service_value);
                         let stack_service_name = service_name.as_str().unwrap();
                         let stack_name = self.config.stack_name.clone();
                         let service_value = service_value.clone();
