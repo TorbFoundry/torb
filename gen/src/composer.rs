@@ -1,5 +1,6 @@
 use crate::artifacts::{ArtifactNodeRepr, ArtifactRepr};
-use crate::utils::torb_path;
+use crate::utils::{torb_path};
+use crate::collection;
 use hcl::{Block, Body, Expression};
 use memorable_wordlist;
 use std::collections::{HashMap, HashSet};
@@ -16,6 +17,13 @@ pub enum TorbComposerErrors {
     EnvironmentsNotFound,
 }
 
+fn reserved_outputs() -> HashMap<String, String> {
+    collection!({
+        "host" => "$name.namespace.svc.local",
+        "port" => "$module.spec."
+    })
+} 
+
 pub struct Composer {
     hash: String,
     build_files_seen: HashSet<String>,
@@ -26,7 +34,7 @@ pub struct Composer {
 
 impl Composer {
     pub fn new(hash: String) -> Composer {
-        let memorable_words = memorable_wordlist::snake_case(16);
+        let memorable_words = memorable_wordlist::kebab_case(16);
 
         Composer {
             hash: hash,
@@ -89,16 +97,15 @@ impl Composer {
             let entry = entry.expect(&error_string);
             if entry.path().is_dir() {
                 let new_dest = dest.join(entry.path().file_name().unwrap());
-
-                if !dest.exists() {
+                if !new_dest.exists() {
                     fs::create_dir(new_dest.clone()).expect("Unable to create supporting buildfile directory at destination, please check torb has been initialized properly.");
                 }
 
                 self._copy_files_recursively(entry.path(), new_dest.clone())
             } else {
                 let path = entry.path();
-                println!("Copying {} to {}", path.display(), dest.display());
                 let new_path = dest.join(path.file_name().unwrap());
+                println!("Copying {} to {}", path.display(), new_path.display());
                 fs::copy(path, new_path).expect("Failed to copy supporting build file.");
             }
         }
@@ -161,13 +168,15 @@ impl Composer {
         &mut self,
         node: &ArtifactNodeRepr,
     ) -> Result<Block, Box<dyn std::error::Error>> {
+        let snake_case_release_name = self.release_name.clone().replace("-", "_");
+        println!("{}", snake_case_release_name);
         let metadata_block = Block::builder("metadata")
-            .add_attribute(("name", format!("{}-{}", self.release_name, node.name)))
+            .add_attribute(("name", format!("{}-{}", &self.release_name, &node.name)))
             .build();
 
         let data_block = Block::builder("data")
             .add_label("kubernetes_service")
-            .add_label(format!("{}_{}", &self.release_name, &node.name))
+            .add_label(format!("{}_{}", &snake_case_release_name, &node.name))
             .add_block(metadata_block)
             .build();
 
