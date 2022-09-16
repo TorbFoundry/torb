@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use serde_yaml::{self};
 use std::collections::{HashMap, HashSet};
 use std::io;
+use indexmap::{IndexMap};
 use std::path::Path;
 use std::process::Command;
 use thiserror::Error;
@@ -113,7 +114,7 @@ impl StackBuilder {
                     "No helm configuration found for {}... trying to deploy...",
                     node.fqn
                 );
-                self.deploy_tf(&tf_path, &HashMap::<String, String>::new(), dryrun)
+                self.deploy_tf(&tf_path, &IndexMap::<String, String>::new(), dryrun)
             }
         }
     }
@@ -134,7 +135,7 @@ impl StackBuilder {
     fn deploy_tf(
         &self,
         path: &std::path::PathBuf,
-        config: &HashMap<String, String>,
+        config: &IndexMap<String, String>,
         dryrun: bool,
     ) -> Result<std::process::Output, Box<dyn std::error::Error>> {
         let torb_path = torb_path();

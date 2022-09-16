@@ -1,6 +1,7 @@
 use crate::artifacts::{ArtifactNodeRepr, ArtifactRepr};
 use crate::utils::torb_path;
 use hcl::{Block, Body, Expression};
+use memorable_wordlist;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{self, Write};
@@ -19,15 +20,19 @@ pub struct Composer {
     hash: String,
     build_files_seen: HashSet<String>,
     fqn_seen: HashSet<String>,
+    release_name: String,
     main_struct: hcl::BodyBuilder,
 }
 
 impl Composer {
     pub fn new(hash: String) -> Composer {
+        let memorable_words = memorable_wordlist::snake_case(16);
+
         Composer {
             hash: hash,
             build_files_seen: HashSet::new(),
             fqn_seen: HashSet::new(),
+            release_name: memorable_words,
             main_struct: Body::builder(),
         }
     }
@@ -40,9 +45,13 @@ impl Composer {
         if !environments_path.exists() {
             return Err(Box::new(TorbComposerErrors::EnvironmentsNotFound));
         }
+
         let new_environment_path = environments_path.join(&self.hash);
 
-        fs::create_dir(new_environment_path).expect("Failed to create new environment directory.");
+        if !new_environment_path.exists() {
+            fs::create_dir(new_environment_path)
+                .expect("Failed to create new environment directory.");
+        }
 
         for node in artifact.deploys.iter() {
             self.walk_artifact(node)?;
@@ -61,9 +70,12 @@ impl Composer {
         let path = torb_path();
         let supporting_build_files_path = path.join("torb-artifacts/common");
         let new_environment_path = torb_path().join("environments").join(&self.hash);
-        let dest = new_environment_path.join(supporting_build_files_path.as_path().file_name().unwrap());
+        let dest =
+            new_environment_path.join(supporting_build_files_path.as_path().file_name().unwrap());
 
-        fs::create_dir(dest.clone()).expect("Unable to create supporting buildfile directory at destination, please check torb has been initialized properly.");
+        if !dest.exists() {
+            fs::create_dir(dest.clone()).expect("Unable to create supporting buildfile directory at destination, please check torb has been initialized properly.");
+        }
 
         self._copy_files_recursively(supporting_build_files_path, dest);
 
@@ -77,7 +89,11 @@ impl Composer {
             let entry = entry.expect(&error_string);
             if entry.path().is_dir() {
                 let new_dest = dest.join(entry.path().file_name().unwrap());
-                fs::create_dir(new_dest.clone()).expect("Unable to create supporting buildfile directory at destination, please check torb has been initialized properly.");
+
+                if !dest.exists() {
+                    fs::create_dir(new_dest.clone()).expect("Unable to create supporting buildfile directory at destination, please check torb has been initialized properly.");
+                }
+
                 self._copy_files_recursively(entry.path(), new_dest.clone())
             } else {
                 let path = entry.path();
@@ -141,19 +157,22 @@ impl Composer {
         Ok(())
     }
 
-    // fn generate_output_data_blocks(&self, node: &ArtifactNodeRepr) -> Result<(), Box<dyn std::error::Error>> {
-    //     let mut output_data_blocks = Body::builder();
+    fn create_output_data_block(
+        &mut self,
+        node: &ArtifactNodeRepr,
+    ) -> Result<Block, Box<dyn std::error::Error>> {
+        let metadata_block = Block::builder("metadata")
+            .add_attribute(("name", format!("{}-{}", self.release_name, node.name)))
+            .build();
 
-    //     for output in node.outputs.iter() {
-    //         let output_data_block = Body::builder()
-    //             .add("value", output.value.clone())
-    //             .build();
+        let data_block = Block::builder("data")
+            .add_label("kubernetes_service")
+            .add_label(format!("{}_{}", &self.release_name, &node.name))
+            .add_block(metadata_block)
+            .build();
 
-    //         output_data_blocks.add(output.name.clone(), output_data_block);
-    //     }
-
-    //     Ok(())
-    // }
+        Ok(data_block)
+    }
 
     fn copy_build_files_for_node(
         &mut self,
@@ -194,19 +213,17 @@ impl Composer {
     ) -> Result<(), Box<dyn std::error::Error>> {
         let source = format!("./{}", node.name);
         let name = node.fqn.clone().replace(".", "_");
-        let namespace = node.fqn.split(".").next().unwrap().to_string().replace("_", "-");
+        let namespace = node
+            .fqn
+            .split(".")
+            .next()
+            .unwrap()
+            .to_string()
+            .replace("_", "-");
 
         let mut attributes = vec![
             ("source", source),
-            (
-                "release_name",
-                node.deploy_steps["helm"]
-                    .clone()
-                    .unwrap()
-                    .get("release_name")
-                    .unwrap_or(&"".to_string())
-                    .clone(),
-            ),
+            ("release_name", self.release_name.clone()),
             (
                 "chart_name",
                 node.deploy_steps["helm"].clone().unwrap()["chart"].clone(),
@@ -218,27 +235,32 @@ impl Composer {
             ("namespace", namespace),
         ];
 
-
         let module_version = node.deploy_steps["helm"]
-                .clone()
-                .unwrap()
-                .get("version")
-                .unwrap_or(&"".to_string())
-                .clone();
+            .clone()
+            .unwrap()
+            .get("version")
+            .unwrap_or(&"".to_string())
+            .clone();
 
         if module_version != "" {
             attributes.push(("version", module_version));
         }
 
-        let builder = std::mem::take(&mut self.main_struct);
+        let output_block = self.create_output_data_block(node)?;
 
-        self.main_struct = builder.add_block(
+        let mut builder = std::mem::take(&mut self.main_struct);
+
+        builder = builder.add_block(
             Block::builder("module")
                 .add_label(&name)
                 .add_attributes(attributes)
                 .add_attribute(("values", vec![""]))
                 .build(),
         );
+
+        builder = builder.add_block(output_block);
+
+        self.main_struct = builder;
 
         Ok(())
     }
