@@ -1,10 +1,10 @@
 use crate::artifacts::{ArtifactNodeRepr, ArtifactRepr};
 use crate::utils::{torb_path};
-use crate::collection;
 use hcl::{Block, Body, Expression};
 use memorable_wordlist;
 use std::collections::{HashMap, HashSet};
 use std::fs;
+use std::hash::Hash;
 use std::io::{self, Write};
 use std::path::Path;
 use std::process::Command;
@@ -17,12 +17,25 @@ pub enum TorbComposerErrors {
     EnvironmentsNotFound,
 }
 
-fn reserved_outputs() -> HashMap<String, String> {
-    collection!({
-        "host" => "$name.namespace.svc.local",
-        "port" => "$module.spec."
-    })
+fn reserved_outputs() -> HashMap<&'static str, &'static str> {
+    let reserved = vec![
+        ("host", "$name.$namespace.svc.cluster.local"),
+        ("port", "$module.status.0.port")
+    ];
+
+
+    let mut reserved_hash = HashMap::new();
+
+    for (k, v) in reserved {
+        reserved_hash.insert(k, v);
+    }
+
+    reserved_hash
 } 
+
+fn k8s_status_values_path_from_torb_output(torb_output: &String, input_node: &ArtifactNodeRepr, output_node: &ArtifactNodeRepr) {
+    
+}
 
 pub struct Composer {
     hash: String,
