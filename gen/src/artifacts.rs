@@ -1,29 +1,43 @@
-use crate::resolver::{BuildStep, DependencyNode, StackGraph};
+use crate::resolver::{BuildStep, DependencyNodeDependencies, StackGraph};
 use crate::utils::torb_path;
 use base64ct::{Base64UrlUnpadded, Encoding};
 use indexmap::IndexMap;
+use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use serde_yaml::{self};
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::Write;
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ArtifactNodeRepr {
+    #[serde(default = "String::new")]
     pub fqn: String,
     pub name: String,
     pub version: String,
     pub kind: String,
+    #[serde(alias = "build")]
     pub build_step: Option<BuildStep>,
+    #[serde(alias = "deploy")]
     pub deploy_steps: IndexMap<String, Option<IndexMap<String, String>>>,
-    pub inputs: IndexMap<String, (String, String)>,
-    pub outputs: IndexMap<String, String>,
+    #[serde(default = "IndexMap::new", rename(serialize = "inputs"))]
+    pub mapped_inputs: IndexMap<String, (String, String)>,
+    #[serde(alias = "inputs", skip_serializing, default = "IndexMap::new")]
+    pub input_spec: IndexMap<String, String>,
+    #[serde(default = "Vec::new")]
+    pub outputs: Vec<String>,
+    #[serde(default = "Vec::new")]
     pub dependencies: Vec<ArtifactNodeRepr>,
+    #[serde(skip)]
+    pub dependency_names: DependencyNodeDependencies,
+    #[serde(default = "String::new")]
     pub file_path: String,
+    #[serde(skip)]
+    pub stack_graph: Option<StackGraph>,
 }
 
 impl ArtifactNodeRepr {
-    fn new(
+    pub fn new(
         fqn: String,
         name: String,
         version: String,
@@ -31,8 +45,10 @@ impl ArtifactNodeRepr {
         build_step: Option<BuildStep>,
         deploy_steps: IndexMap<String, Option<IndexMap<String, String>>>,
         inputs: IndexMap<String, (String, String)>,
-        outputs: IndexMap<String, String>,
+        input_spec: IndexMap<String, String>,
+        outputs: Vec<String>,
         file_path: String,
+        stack_graph: Option<StackGraph>,
     ) -> ArtifactNodeRepr {
         ArtifactNodeRepr {
             fqn: fqn,
@@ -41,11 +57,76 @@ impl ArtifactNodeRepr {
             kind: kind.to_string(),
             build_step: build_step,
             deploy_steps: deploy_steps,
-            inputs: inputs,
+            mapped_inputs: inputs,
+            input_spec: input_spec,
             outputs: outputs,
             dependencies: Vec::new(),
+            dependency_names: DependencyNodeDependencies {
+                services: None,
+                projects: None,
+                stacks: None,
+            },
             file_path,
+            stack_graph,
         }
+    }
+
+    pub fn validate_map_and_set_inputs(&mut self, inputs: IndexMap<String, String>) {
+        if !self.input_spec.is_empty() {
+            let input_spec = &self.input_spec.clone();
+
+            match ArtifactNodeRepr::validate_inputs(&inputs, &input_spec) {
+                Ok(_) => {
+                    self.mapped_inputs = ArtifactNodeRepr::map_inputs(&inputs, &input_spec);
+                }
+                Err(e) => panic!(
+                    "Input validation failed: {} is not a valid key. Valid Keys: {}",
+                    e,
+                    input_spec
+                        .keys()
+                        .into_iter()
+                        .map(AsRef::as_ref)
+                        .collect::<Vec<&str>>()
+                        .join(", ")
+                ),
+            }
+        } else {
+            if !inputs.is_empty() {
+                println!(
+                    "Warning: {} has inputs but no input spec, passing empty values.",
+                    &self.fqn
+                );
+            }
+
+            self.mapped_inputs = IndexMap::<String, (String, String)>::new();
+        }
+    }
+
+    fn validate_inputs(
+        inputs: &IndexMap<String, String>,
+        spec: &IndexMap<String, String>,
+    ) -> Result<(), String> {
+        for (key, _) in inputs.iter() {
+            if !spec.contains_key(key) {
+                return Err(key.clone());
+            }
+        }
+
+        Ok(())
+    }
+
+    fn map_inputs(
+        inputs: &IndexMap<String, String>,
+        spec: &IndexMap<String, String>,
+    ) -> IndexMap<String, (String, String)> {
+        let mut mapped_inputs = IndexMap::<String, (String, String)>::new();
+
+        for (key, value) in inputs.iter() {
+            let spec_value = spec.get(key).unwrap();
+            mapped_inputs.insert(key.to_string(), (spec_value.to_string(), value.to_string()));
+        }
+
+        mapped_inputs
     }
 }
 
@@ -59,6 +140,8 @@ pub struct ArtifactRepr {
     pub ingress: bool,
     pub meta: Box<Option<ArtifactRepr>>,
     pub deploys: Vec<ArtifactNodeRepr>,
+    #[serde(skip)]
+    pub nodes: HashMap<String, ArtifactNodeRepr>
 }
 
 impl ArtifactRepr {
@@ -80,12 +163,13 @@ impl ArtifactRepr {
             ingress,
             meta,
             deploys: Vec::new(),
+            nodes: HashMap::new()
         }
     }
 }
 
-fn get_start_nodes(graph: &StackGraph) -> Vec<&DependencyNode> {
-    let mut start_nodes = Vec::<&DependencyNode>::new();
+fn get_start_nodes(graph: &StackGraph) -> Vec<&ArtifactNodeRepr> {
+    let mut start_nodes = Vec::<&ArtifactNodeRepr>::new();
 
     for (fqn, list) in graph.incoming_edges.iter() {
         let kind = fqn.split(".").collect::<Vec<&str>>()[1];
@@ -107,7 +191,7 @@ fn get_start_nodes(graph: &StackGraph) -> Vec<&DependencyNode> {
 fn walk_graph(graph: &StackGraph) -> Result<ArtifactRepr, Box<dyn std::error::Error>> {
     let start_nodes = get_start_nodes(graph);
 
-    let meta = meta_into_artifact(&graph.meta)?;
+    let meta = stack_into_artifact(&graph.meta)?;
 
     let mut artifact = ArtifactRepr::new(
         graph.version.clone(),
@@ -126,108 +210,40 @@ fn walk_graph(graph: &StackGraph) -> Result<ArtifactRepr, Box<dyn std::error::Er
     Ok(artifact)
 }
 
-fn meta_into_artifact(
-    meta: &Box<Option<DependencyNode>>,
-) -> Result<Box<Option<ArtifactRepr>>, Box<dyn std::error::Error>> {
+pub fn stack_into_artifact(meta: &Box<Option<ArtifactNodeRepr>>) -> Result<Box<Option<ArtifactRepr>>, Box<dyn std::error::Error>> {
     let unboxed_meta = meta.as_ref();
     match unboxed_meta {
         Some(meta) => {
             let artifact = walk_graph(&meta.stack_graph.clone().unwrap())?;
             Ok(Box::new(Some(artifact)))
-        }
-        None => Ok(Box::new(None)),
+        },
+        None => { Ok(Box::new(None)) }
     }
 }
 
-fn validate_and_map_inputs(node: &DependencyNode) -> IndexMap<String, (String, String)> {
-    if node.input_spec.is_some() {
-        let input_spec = &node.input_spec.clone().unwrap();
-
-        match validate_inputs(&node.inputs, &input_spec) {
-            Ok(_) => map_inputs(&node.inputs, &input_spec),
-            Err(e) => panic!(
-                "Input validation failed: {} is not a valid key. Valid Keys: {}",
-                e,
-                input_spec
-                    .keys()
-                    .into_iter()
-                    .map(AsRef::as_ref)
-                    .collect::<Vec<&str>>()
-                    .join(", ")
-            )
-        }
-    } else {
-        if !node.inputs.is_empty() {
-            println!("Warning: {} has inputs but no input spec, passing empty values.", node.fqn);
-        }
-
-        IndexMap::new()
-    }
-}
-
-fn walk_nodes(node: &DependencyNode, graph: &StackGraph) -> ArtifactNodeRepr {    
-    let inputs = validate_and_map_inputs(node);
-
-    let mut artifact_node = ArtifactNodeRepr::new(
-        node.fqn.to_string(),
-        node.name.to_string(),
-        node.version.to_string(),
-        node.kind.to_string(),
-        node.build_step.clone(),
-        node.deploy_steps.clone(),
-        inputs,
-        node.outputs.clone(),
-        node.file_path.clone(),
-    );
-
-    node.dependencies.projects.as_ref().map_or((), |projects| {
+fn walk_nodes(node: &ArtifactNodeRepr, graph: &StackGraph) -> ArtifactNodeRepr {
+    let mut new_node = node.clone();
+    new_node.dependency_names.projects.as_ref().map_or((), |projects| {
         for project in projects {
             let p_fqn = format!("{}.project.{}", graph.name.clone(), project.clone());
             let p_node = graph.projects.get(&p_fqn).unwrap();
             let p_node_repr = walk_nodes(p_node, graph);
 
-            artifact_node.dependencies.push(p_node_repr);
+            new_node.dependencies.push(p_node_repr);
         }
     });
 
-    node.dependencies.services.as_ref().map_or((), |services| {
+    new_node.dependency_names.services.as_ref().map_or((), |services| {
         for service in services {
             let s_fqn = format!("{}.service.{}", graph.name.clone(), service.clone());
             let s_node = graph.services.get(&s_fqn).unwrap();
             let s_node_repr = walk_nodes(s_node, graph);
 
-            artifact_node.dependencies.push(s_node_repr);
+            new_node.dependencies.push(s_node_repr);
         }
     });
 
-    return artifact_node;
-}
-
-fn validate_inputs(
-    inputs: &IndexMap<String, String>,
-    spec: &IndexMap<String, String>,
-) -> Result<(), String> {
-    for (key, _) in inputs.iter() {
-        if !spec.contains_key(key) {
-            return Err(key.clone());
-        }
-    }
-
-    Ok(())
-}
-
-fn map_inputs(
-    inputs: &IndexMap<String, String>,
-    spec: &IndexMap<String, String>,
-) -> IndexMap<String, (String, String)> {
-    let mut mapped_inputs = IndexMap::<String, (String, String)>::new();
-
-    for (key, value) in inputs.iter() {
-        let spec_value = spec.get(key).unwrap();
-        mapped_inputs.insert(key.to_string(), (spec_value.to_string(), value.to_string()));
-    }
-
-    mapped_inputs
+    return new_node;
 }
 
 pub fn write_build_file(graph: StackGraph) -> (String, String, ArtifactRepr) {

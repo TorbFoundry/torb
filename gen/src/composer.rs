@@ -56,7 +56,7 @@ impl InputAddress {
     }
 
     fn input_address_or<F: FnOnce(&str) -> &str> (input: &str, f: F) -> String {
-        
+       "" .to_string()
     }
 
 }
@@ -100,23 +100,23 @@ impl<'a> Composer<'a>{
         }
     }
 
-    fn k8s_status_values_path_from_torb_input(
-        &self,
-        torb_input: &String,
-    ) -> String {
-        let input = torb_input.split(".").last().unwrap();
+    // fn k8s_status_values_path_from_torb_input(
+    //     &self,
+    //     torb_input: &String,
+    // ) -> String {
+    //     let input = torb_input.split(".").last().unwrap();
 
-        let (kube_value, _) = output_node
-            .inputs
-            .get(input)
-            .expect("Unable to map input from output node. Key does not exist.");
+    //     let (kube_value, _) = output_node
+    //         .inputs
+    //         .get(input)
+    //         .expect("Unable to map input from output node. Key does not exist.");
 
-        let formatted_name = kebab_to_snake_case(&self.release_name);
+    //     let formatted_name = kebab_to_snake_case(&self.release_name);
 
-        let block_name = format!("{}_{}", formatted_name, &output_node.name);
+    //     let block_name = format!("{}_{}", formatted_name, &output_node.name);
 
-        format!("{}.status.0.values.{}", block_name, kube_value)
-    }
+    //     format!("{}.status.0.values.{}", block_name, kube_value)
+    // }
 
     pub fn compose(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         println!("Composing build environment...");
@@ -292,19 +292,19 @@ impl<'a> Composer<'a>{
     fn parse_input(self, input: &str) {
     }
 
-    fn create_input_blocks(&self, node: &ArtifactNodeRepr) -> Vec<Block> {
-        let mut input_blocks = Vec::new();
-        for (name, (spec, value)) in node.inputs.iter() {
-            let value = self.k8s_status_values_path_from_torb_input(value);
-            let block = Block::builder("set")
-                .add_attribute((spec, RawExpression::new(value.clone())))
-                .build();
+    // fn create_input_blocks(&self, node: &ArtifactNodeRepr) -> Vec<Block> {
+    //     let mut input_blocks = Vec::new();
+    //     for (name, (spec, value)) in node.inputs.iter() {
+    //         let value = self.k8s_status_values_path_from_torb_input(value);
+    //         let block = Block::builder("set")
+    //             .add_attribute((spec, RawExpression::new(value.clone())))
+    //             .build();
 
-            input_blocks.push(block);
-        }
+    //         input_blocks.push(block);
+    //     }
 
-        input_blocks
-    }
+    //     input_blocks
+    // }
 
     fn add_to_main_struct(
         &mut self,
@@ -320,7 +320,7 @@ impl<'a> Composer<'a>{
             .to_string()
             .replace("_", "-");
 
-        let inputs = self.create_input_blocks(node);
+        // let inputs = self.create_input_blocks(node);
 
         let mut attributes = vec![
             ("source", source),
