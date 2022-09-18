@@ -5,6 +5,7 @@ use std::collections::{HashSet, HashMap};
 use indexmap::{IndexMap};
 use std::{error::Error, path::PathBuf};
 use thiserror::Error;
+use crate::artifacts::{ArtifactNodeRepr, ArtifactRepr};
 use crate::utils::{normalize_name, torb_path};
 
 
@@ -62,67 +63,6 @@ pub struct StackConfig {
     pub ingress: bool,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct DependencyNode {
-    pub version: String,
-    pub kind: String,
-    pub name: String,
-    #[serde(rename(deserialize = "deploy"))]
-    pub deploy_steps: IndexMap<String, Option<IndexMap<String, String>>>,
-    #[serde(rename(deserialize = "build"))]
-    pub build_step: Option<BuildStep>,
-    #[serde(rename(deserialize = "inputs"))]
-    pub input_spec: Option<IndexMap<String, String>>,
-    #[serde(rename(deserialize = "outputs"))]
-    pub output_spec: Option<HashSet<String>>,
-    #[serde(default="Resolver::default_inputs")]
-    pub inputs: IndexMap<String, String>,
-    #[serde(default="Resolver::default_ouputs")]
-    pub outputs: IndexMap<String, String>,
-    #[serde(skip)]
-    pub stack_graph: Option<StackGraph>,
-    #[serde(skip)]
-    pub dependencies: DependencyNodeDependencies,
-    #[serde(skip)]
-    pub fqn: String,
-    #[serde(skip)]
-    pub file_path: String,
-}
-
-impl DependencyNode {
-    pub fn new(
-        name: String,
-        deploy_steps: IndexMap<String, Option<IndexMap<String, String>>>,
-        build_step: Option<BuildStep>,
-        input_spec: Option<IndexMap<String, String>>,
-        output_spec: Option<HashSet<String>>,
-        inputs: IndexMap<String, String>,
-        outputs: IndexMap<String, String>,
-        version: String,
-        kind: String,
-        stack_graph: Option<StackGraph>,
-        dependencies: DependencyNodeDependencies,
-        file_path: String,
-    ) -> DependencyNode {
-        let fqn = "".to_string();
-        DependencyNode {
-            name,
-            deploy_steps: deploy_steps,
-            build_step: build_step,
-            input_spec: input_spec,
-            output_spec: output_spec,
-            inputs: inputs,
-            outputs: outputs,
-            version,
-            kind,
-            stack_graph,
-            dependencies,
-            fqn,
-            file_path,
-        }
-    }
-}
-
 #[derive(Serialize, Deserialize, Default, Clone, Debug)]
 pub struct DependencyNodeDependencies {
     pub services: Option<Vec<String>>,
@@ -143,16 +83,16 @@ impl DependencyNodeDependencies {
 #[derive(Clone, Debug)]
 pub struct StackGraph {
     pub stack_config: StackConfig,
-    pub services: HashMap<String, DependencyNode>,
-    pub projects: HashMap<String, DependencyNode>,
-    pub stacks: HashMap<String, DependencyNode>,
+    pub services: HashMap<String, ArtifactNodeRepr>,
+    pub projects: HashMap<String, ArtifactNodeRepr>,
+    pub stacks: HashMap<String, ArtifactNodeRepr>,
     pub name: String,
     pub version: String,
     pub kind: String,
     pub commit: String,
     pub tf_version: String,
     pub helm_version: String,
-    pub meta: Box<Option<DependencyNode>>,
+    pub meta: Box<Option<ArtifactNodeRepr>>,
     pub incoming_edges: HashMap<String, Vec<String>>,
 }
 
@@ -165,12 +105,12 @@ impl StackGraph {
         commit: String,
         tf_version: String,
         helm_version: String,
-        meta: Box<Option<DependencyNode>>,
+        meta: Box<Option<ArtifactNodeRepr>>,
     ) -> StackGraph {
         StackGraph {
-            services: HashMap::<String, DependencyNode>::new(),
-            projects: HashMap::<String, DependencyNode>::new(),
-            stacks: HashMap::<String, DependencyNode>::new(),
+            services: HashMap::<String, ArtifactNodeRepr>::new(),
+            projects: HashMap::<String, ArtifactNodeRepr>::new(),
+            stacks: HashMap::<String, ArtifactNodeRepr>::new(),
             stack_config,
             name,
             version,
@@ -183,22 +123,21 @@ impl StackGraph {
         }
     }
 
-    pub fn add_service(&mut self, node: &DependencyNode) {
+    pub fn add_service(&mut self, node: &ArtifactNodeRepr) {
         self.services.insert(node.fqn.clone(), node.clone());
     }
-    pub fn add_project(&mut self, node: &DependencyNode) {
+    pub fn add_project(&mut self, node: &ArtifactNodeRepr) {
         self.projects.insert(node.fqn.clone(), node.clone());
     }
-    pub fn add_stack(&mut self, node: &DependencyNode) {
+    pub fn add_stack(&mut self, node: &ArtifactNodeRepr) {
         self.stacks.insert(node.fqn.clone(), node.clone());
     }
-
-    pub fn add_all_incoming_edges_downstream(&mut self, stack_name: String, node: &DependencyNode) {
+    pub fn add_all_incoming_edges_downstream(&mut self, stack_name: String, node: &ArtifactNodeRepr) {
         self.incoming_edges
             .entry(node.fqn.clone())
             .or_insert(Vec::<String>::new());
 
-        node.dependencies.projects.as_ref().map_or((), |projects| {
+        node.dependency_names.projects.as_ref().map_or((), |projects| {
             projects.iter().for_each(|project| {
                 let p_fqn = format!("{}.{}.{}", stack_name, "project".to_string(), project);
                 match self.incoming_edges.get_mut(p_fqn.as_str()) {
@@ -214,7 +153,7 @@ impl StackGraph {
             });
         });
 
-        node.dependencies.services.as_ref().map_or((), |projects| {
+        node.dependency_names.services.as_ref().map_or((), |projects| {
             projects.iter().for_each(|project| {
                 let s_fqn = format!("{}.{}.{}", stack_name, "service".to_string(), project);
                 match self.incoming_edges.get_mut(project) {
@@ -230,7 +169,7 @@ impl StackGraph {
             });
         });
 
-        node.dependencies.stacks.as_ref().map_or((), |projects| {
+        node.dependency_names.stacks.as_ref().map_or((), |projects| {
             projects.iter().for_each(|project| {
                 let s_fqn = format!("{}.{}.{}", stack_name, "stack".to_string(), project);
                 match self.incoming_edges.get_mut(project) {
@@ -246,6 +185,7 @@ impl StackGraph {
             });
         });
     }
+
 }
 
 pub struct Resolver {
@@ -269,7 +209,7 @@ impl Resolver {
         Ok(graph)
     }
 
-    fn resolve_meta(&self, meta_file: &str) -> Result<Box<Option<DependencyNode>>, Box<dyn Error>> {
+    fn resolve_meta(&self, meta_file: &str) -> Result<Box<Option<ArtifactNodeRepr>>, Box<dyn Error>> {
         if meta_file != "" {
             let torb_path = torb_path();
             let artifacts_path = torb_path.join("torb-artifacts");
@@ -357,13 +297,12 @@ impl Resolver {
         service_name: &str,
         artifact_path: PathBuf,
         inputs: IndexMap<String, String>,
-        outputs: IndexMap<String, String>,
-    ) -> Result<DependencyNode, Box<dyn Error>> {
+    ) -> Result<ArtifactNodeRepr, Box<dyn Error>> {
         let services_path = artifact_path.join("services");
         let service_path = services_path.join(service_name);
         let torb_yaml_path = service_path.join("torb.yaml");
         let torb_yaml = std::fs::read_to_string(&torb_yaml_path)?;
-        let mut node: DependencyNode = serde_yaml::from_str(torb_yaml.as_str())?;
+        let mut node: ArtifactNodeRepr = serde_yaml::from_str(torb_yaml.as_str())?;
         println!("Resolving service: {}", node.fqn);
         let node_fp = torb_yaml_path
             .to_str()
@@ -371,8 +310,7 @@ impl Resolver {
             .to_string();
         node.fqn = format!("{}.{}.{}", stack_name, stack_kind_name, node_name);
         node.file_path = node_fp;
-        node.inputs = inputs;
-        node.outputs = outputs;
+        node.validate_map_and_set_inputs(inputs);
 
         Ok(node)
     }
@@ -385,21 +323,19 @@ impl Resolver {
         project_name: &str,
         artifact_path: PathBuf,
         inputs: IndexMap<String, String>,
-        outputs: IndexMap<String, String>,
-    ) -> Result<DependencyNode, Box<dyn Error>> {
+    ) -> Result<ArtifactNodeRepr, Box<dyn Error>> {
         let projects_path = artifact_path.join("projects");
         let project_path = projects_path.join(project_name);
         let torb_yaml_path = project_path.join("torb.yaml");
         let torb_yaml = std::fs::read_to_string(&torb_yaml_path)?;
-        let mut node: DependencyNode = serde_yaml::from_str(torb_yaml.as_str())?;
+        let mut node: ArtifactNodeRepr = serde_yaml::from_str(torb_yaml.as_str())?;
         let node_fp = torb_yaml_path
             .to_str()
             .ok_or("Could not convert path to string.")?
             .to_string();
         node.fqn = format!("{}.{}.{}", stack_name, stack_kind_name, node_name);
         node.file_path = node_fp;
-        node.inputs = inputs;
-        node.outputs = outputs;
+        node.validate_map_and_set_inputs(inputs);
 
         Ok(node)
     }
@@ -410,29 +346,28 @@ impl Resolver {
         stack_kind_name: &str,
         name: &str,
         artifact_path: PathBuf,
-    ) -> Result<DependencyNode, Box<dyn Error>> {
+    ) -> Result<ArtifactNodeRepr, Box<dyn Error>> {
         let stack_path = artifact_path.join("stacks");
         let stack_yaml_path = stack_path.join(format!("{}.yaml", stack_name));
         let torb_yaml = std::fs::read_to_string(&stack_yaml_path)?;
         let graph = self.build_graph(serde_yaml::from_str(torb_yaml.as_str())?)?;
-        let mut node = DependencyNode::new(
+        let fqn = format!("{}.{}.{}", stack_name, stack_kind_name, name);
+        let node = ArtifactNodeRepr::new(
+            fqn,
             graph.name.clone(),
-            IndexMap::<String, Option<IndexMap<String, String>>>::new(),
-            None,
-            None,
-            None,
-            IndexMap::<String, String>::new(),
-            IndexMap::<String, String>::new(),
             graph.version.clone(),
             "stack".to_string(),
-            Some(graph),
-            DependencyNodeDependencies::new(),
+            None,
+            IndexMap::<String, Option<IndexMap<String, String>>>::new(),
+            IndexMap::<String, (String, String)>::new(),
+            IndexMap::<String, String>::new(),
+            Vec::<String>::new(),
             stack_yaml_path
                 .to_str()
                 .ok_or("Could not convert path to string.")?
                 .to_string(),
+            Some(graph)
         );
-        node.fqn = format!("{}.{}.{}", stack_name, stack_kind_name, name);
 
         Ok(node)
     }
@@ -450,12 +385,17 @@ impl Resolver {
         }
     }
 
-    fn default_inputs() -> IndexMap<String, String> {
-        IndexMap::new()
-    }
+    fn deserialize_outputs(params: Option<&serde_yaml::Value>) -> Result<Vec<String>, Box<dyn Error>> {
+        match params {
+            Some(params) => {
+                let deserialized_params: Vec<String> = serde_yaml::from_value(params.clone())?;
 
-    fn default_ouputs() -> IndexMap<String, String> {
-        IndexMap::new()
+                Ok(deserialized_params)
+            },
+            None => {
+                Ok(Vec::new())
+            }
+        }
     }
 
     fn resolve_node(
@@ -464,14 +404,13 @@ impl Resolver {
         stack_kind_name: &str,
         node_name: &str,
         yaml: serde_yaml::Value,
-    ) -> Result<DependencyNode, Box<dyn Error>> {
+    ) -> Result<ArtifactNodeRepr, Box<dyn Error>> {
         println!("Resolving node: {}", node_name);
         let err = TorbResolverErrors::CannotParseStackManifest;
         let home_dir = dirs::home_dir().unwrap();
         let torb_path = home_dir.join(".torb");
         let artifacts_path = torb_path.join("torb-artifacts");
         let inputs = Resolver::deserialize_params(yaml.get("inputs")).expect("Unable to deserialize inputs.");
-        let outputs = Resolver::deserialize_params(yaml.get("outputs")).expect("Unable to deserialize outputs.");
         let mut node = match stack_kind_name {
             "service" => {
                 let service_name = yaml.get("service").ok_or(err)?.as_str().expect("Unable to parse service name.");
@@ -482,7 +421,6 @@ impl Resolver {
                     service_name,
                     artifacts_path,
                     inputs,
-                    outputs,
                 )
             }
             "project" => {
@@ -494,7 +432,6 @@ impl Resolver {
                     project_name,
                     artifacts_path,
                     inputs,
-                    outputs,
                 )
             }
             // TODO(Ian): Revisit nested stacks after MVP.
@@ -515,7 +452,7 @@ impl Resolver {
                 let yaml_str = serde_yaml::to_string(deps)?;
                 let deps: DependencyNodeDependencies =
                     serde_yaml::from_str(yaml_str.as_str()).unwrap();
-                node.dependencies = deps;
+                node.dependency_names = deps;
 
                 Ok(node)
             }
