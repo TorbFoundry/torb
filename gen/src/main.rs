@@ -99,8 +99,8 @@ fn build_stack(build_artifact: ArtifactRepr, dryrun: bool) -> Result<(), Box<dyn
 }
 
 fn compose_build_environment(build_hash: String, build_artifact: &ArtifactRepr) {
-    let mut composer = Composer::new(build_hash);
-    composer.compose(build_artifact).unwrap();
+    let mut composer = Composer::new(build_hash, build_artifact);
+    composer.compose().unwrap();
 }
 
 fn update_artifacts() {
