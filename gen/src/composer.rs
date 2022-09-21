@@ -19,8 +19,8 @@ pub enum TorbComposerErrors {
 
 fn reserved_outputs() -> HashMap<&'static str, &'static str> {
     let reserved = vec![
-        ("host", "$name.$namespace.svc.cluster.local"),
-        ("port", "$module.status.0.port"),
+        ("host", ""),
+        ("port", ""),
     ];
 
     let mut reserved_hash = HashMap::new();
@@ -36,44 +36,60 @@ fn kebab_to_snake_case(input: &str) -> String {
     input.replace("-", "_")
 }
 
+#[derive(Debug)]
 struct InputAddress {
     locality: String,
     node_type: String,
     node_name: String,
     node_property: String,
-    property_specifier: String
+    property_specifier: String,
 }
 
 impl InputAddress {
-    fn new(locality: String, node_type: String, node_name: String, node_property: String, property_specifier: String) -> InputAddress {
+    fn new(
+        locality: String,
+        node_type: String,
+        node_name: String,
+        node_property: String,
+        property_specifier: String,
+    ) -> InputAddress {
         InputAddress {
             locality,
             node_type,
             node_name,
             node_property,
-            property_specifier
+            property_specifier,
         }
     }
 
-    fn input_address_or<F: FnOnce(&str) -> &str> (input: &str, f: F) -> String {
-       "" .to_string()
+    fn input_address_or<F: FnOnce(&str) -> &str>(input: &str, f: F) -> String {
+        "".to_string()
     }
-
 }
 
 impl TryFrom<&str> for InputAddress {
-    type Error = Box<dyn std::error::Error>;
+    type Error = String;
 
-    fn try_from(input: &str) -> Result<Self, Self::Error> {
+    fn try_from(input: &str) -> Result<Self, String> {
         let vals = input.split(".").collect::<Vec<&str>>();
 
-        let locality = vals[0].to_string();
-        let node_type = vals[1].to_string();
-        let node_name = vals[2].to_string();
-        let node_property = vals[3].to_string();
-        let property_specifier = vals[4].to_string();
+        if vals.len() == 5 {
+            let locality = vals[0].to_string();
+            let node_type = vals[1].to_string();
+            let node_name = vals[2].to_string();
+            let node_property = vals[3].to_string();
+            let property_specifier = vals[4].to_string();
 
-        Ok(InputAddress::new(locality, node_type, node_name, node_property, property_specifier))
+            Ok(InputAddress::new(
+                locality,
+                node_type,
+                node_name,
+                node_property,
+                property_specifier,
+            ))
+        } else {
+            Err(input.to_string())
+        }
     }
 }
 
@@ -86,7 +102,7 @@ pub struct Composer<'a> {
     artifact_repr: &'a ArtifactRepr,
 }
 
-impl<'a> Composer<'a>{
+impl<'a> Composer<'a> {
     pub fn new(hash: String, artifact_repr: &ArtifactRepr) -> Composer {
         let memorable_words = memorable_wordlist::kebab_case(16);
 
@@ -96,27 +112,72 @@ impl<'a> Composer<'a>{
             fqn_seen: HashSet::new(),
             release_name: memorable_words,
             main_struct: Body::builder(),
-            artifact_repr: artifact_repr
+            artifact_repr: artifact_repr,
         }
     }
 
-    // fn k8s_status_values_path_from_torb_input(
-    //     &self,
-    //     torb_input: &String,
-    // ) -> String {
-    //     let input = torb_input.split(".").last().unwrap();
+    fn get_node_for_output_value(&self, torb_input_address: &InputAddress) -> &ArtifactNodeRepr {
+        let stack_name = &self.artifact_repr.stack_name;
+        let output_node_fqn = format!(
+            "{}.{}.{}",
+            stack_name, &torb_input_address.node_type, &torb_input_address.node_name
+        );
 
-    //     let (kube_value, _) = output_node
-    //         .inputs
-    //         .get(input)
-    //         .expect("Unable to map input from output node. Key does not exist.");
+        println!("{:?}", self.artifact_repr.nodes.keys());
+        println!("{:?}", &torb_input_address);
+        println!("{:?}", output_node_fqn);
 
-    //     let formatted_name = kebab_to_snake_case(&self.release_name);
+        self
+            .artifact_repr
+            .nodes
+            .get(&output_node_fqn)
+            .expect("Unable to map input address to node, make sure your mapping is correct.")
+    }
 
-    //     let block_name = format!("{}_{}", formatted_name, &output_node.name);
+    fn k8s_value_from_reserved_input(&self, torb_input_address: InputAddress) -> String {
+        let output_node = self.get_node_for_output_value(&torb_input_address);
 
-    //     format!("{}.status.0.values.{}", block_name, kube_value)
-    // }
+        match torb_input_address.property_specifier.as_str() {
+            "host" => {
+                let name = format!("{}-{}", self.release_name, output_node.name);
+                let namespace = self.artifact_repr.stack_name.clone();
+
+                format!("{}.{}.svc.cluster.local", name, namespace)
+            },
+            "port" => {
+                let formatted_name = kebab_to_snake_case(&self.release_name);
+                let module = format!("{}_{}", formatted_name, &output_node.name);
+
+                format!("{}.status.0.port", module)
+            }
+            _ => {
+                panic!("Unable to map reserved value.")
+            }
+        }        
+    }
+
+    fn k8s_status_values_path_from_torb_input(&self, torb_input_address: InputAddress) -> String {
+        let output_node = self.get_node_for_output_value(&torb_input_address);
+
+        let kube_value = if torb_input_address.node_property == "output" {
+
+            println!("{:?}", output_node.mapped_inputs);
+            println!("{:?}", &torb_input_address.property_specifier);
+            let (kube_val, _) = output_node
+                .mapped_inputs
+                .get(&torb_input_address.property_specifier)
+                .expect("Unable to map input from output node. Key does not exist.");
+
+            kube_val
+        } else {
+            panic!("Unable to map node_property to output attribute please check your inputs, ex: 'a.b.output.c or a.b.input.c");
+        };
+
+        let formatted_name = kebab_to_snake_case(&self.release_name);
+        let block_name = format!("{}_{}", formatted_name, &output_node.name);
+
+        format!("{}.status.0.values.{}", block_name, kube_value)
+    }
 
     pub fn compose(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         println!("Composing build environment...");
@@ -289,22 +350,34 @@ impl<'a> Composer<'a>{
         Ok(true)
     }
 
-    fn parse_input(self, input: &str) {
+
+    fn create_input_blocks(&self, node: &ArtifactNodeRepr) -> Vec<Block> {
+        let mut input_blocks = Vec::new();
+        for (_, (spec, value)) in node.mapped_inputs.iter() {
+            let input_address_result = InputAddress::try_from(value.clone().as_str());
+
+            let value = match input_address_result {
+                Ok(input_address) => {
+                    if reserved_outputs().contains_key(input_address.property_specifier.as_str()) {
+                        self.k8s_value_from_reserved_input(input_address)
+                    } else {
+                        self.k8s_status_values_path_from_torb_input(input_address)
+                    }
+                },
+                Err(input) => {
+                    input
+                },
+            };
+
+            let block = Block::builder("set")
+                .add_attribute((spec, RawExpression::new(value.clone())))
+                .build();
+
+            input_blocks.push(block);
+        }
+
+        input_blocks
     }
-
-    // fn create_input_blocks(&self, node: &ArtifactNodeRepr) -> Vec<Block> {
-    //     let mut input_blocks = Vec::new();
-    //     for (name, (spec, value)) in node.inputs.iter() {
-    //         let value = self.k8s_status_values_path_from_torb_input(value);
-    //         let block = Block::builder("set")
-    //             .add_attribute((spec, RawExpression::new(value.clone())))
-    //             .build();
-
-    //         input_blocks.push(block);
-    //     }
-
-    //     input_blocks
-    // }
 
     fn add_to_main_struct(
         &mut self,
@@ -320,7 +393,7 @@ impl<'a> Composer<'a>{
             .to_string()
             .replace("_", "-");
 
-        // let inputs = self.create_input_blocks(node);
+        let inputs = self.create_input_blocks(node);
 
         let mut attributes = vec![
             ("source", source),

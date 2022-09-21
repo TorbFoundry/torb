@@ -3,6 +3,7 @@ use crate::utils::torb_path;
 use base64ct::{Base64UrlUnpadded, Encoding};
 use indexmap::IndexMap;
 use std::collections::HashMap;
+use std::hash::Hash;
 use serde::{Deserialize, Serialize};
 use serde_yaml::{self};
 use sha2::{Digest, Sha256};
@@ -202,10 +203,15 @@ fn walk_graph(graph: &StackGraph) -> Result<ArtifactRepr, Box<dyn std::error::Er
         graph.stack_config.ingress,
         meta,
     );
+
+    let mut node_map: HashMap<String, ArtifactNodeRepr> = HashMap::new();
+
     for node in start_nodes {
-        let artifact_repr = walk_nodes(node, graph);
-        artifact.deploys.push(artifact_repr);
+        let artifact_node_repr = walk_nodes(node, graph, &mut node_map);
+        artifact.deploys.push(artifact_node_repr);
     }
+    
+    artifact.nodes = node_map;
 
     Ok(artifact)
 }
@@ -221,13 +227,13 @@ pub fn stack_into_artifact(meta: &Box<Option<ArtifactNodeRepr>>) -> Result<Box<O
     }
 }
 
-fn walk_nodes(node: &ArtifactNodeRepr, graph: &StackGraph) -> ArtifactNodeRepr {
+fn walk_nodes(node: &ArtifactNodeRepr, graph: &StackGraph, node_map: &mut HashMap<String, ArtifactNodeRepr>) -> ArtifactNodeRepr {
     let mut new_node = node.clone();
     new_node.dependency_names.projects.as_ref().map_or((), |projects| {
         for project in projects {
             let p_fqn = format!("{}.project.{}", graph.name.clone(), project.clone());
             let p_node = graph.projects.get(&p_fqn).unwrap();
-            let p_node_repr = walk_nodes(p_node, graph);
+            let p_node_repr = walk_nodes(p_node, graph, node_map);
 
             new_node.dependencies.push(p_node_repr);
         }
@@ -237,11 +243,13 @@ fn walk_nodes(node: &ArtifactNodeRepr, graph: &StackGraph) -> ArtifactNodeRepr {
         for service in services {
             let s_fqn = format!("{}.service.{}", graph.name.clone(), service.clone());
             let s_node = graph.services.get(&s_fqn).unwrap();
-            let s_node_repr = walk_nodes(s_node, graph);
+            let s_node_repr = walk_nodes(s_node, graph, node_map);
 
             new_node.dependencies.push(s_node_repr);
         }
     });
+
+    node_map.insert(node.fqn.clone(), new_node.clone());
 
     return new_node;
 }
