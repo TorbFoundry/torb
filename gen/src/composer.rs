@@ -1,14 +1,13 @@
 use crate::artifacts::{ArtifactNodeRepr, ArtifactRepr};
 use crate::utils::torb_path;
-use hcl::{Block, Body, Expression, RawExpression};
+use hcl::{Block, Body, Expression, RawExpression, Value, Object, ObjectKey};
 use memorable_wordlist;
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::hash::Hash;
 use std::io::{self, Write};
+use std::os::linux::raw;
 use std::path::Path;
-use std::process::Command;
-use tempfile::NamedTempFile;
+use indexmap::IndexMap;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -60,10 +59,6 @@ impl InputAddress {
             node_property,
             property_specifier,
         }
-    }
-
-    fn input_address_or<F: FnOnce(&str) -> &str>(input: &str, f: F) -> String {
-        "".to_string()
     }
 }
 
@@ -134,7 +129,7 @@ impl<'a> Composer<'a> {
             .expect("Unable to map input address to node, make sure your mapping is correct.")
     }
 
-    fn k8s_value_from_reserved_input(&self, torb_input_address: InputAddress) -> String {
+    fn k8s_value_from_reserved_input(&self, torb_input_address: InputAddress) -> Expression {
         let output_node = self.get_node_for_output_value(&torb_input_address);
 
         match torb_input_address.property_specifier.as_str() {
@@ -142,13 +137,13 @@ impl<'a> Composer<'a> {
                 let name = format!("{}-{}", self.release_name, output_node.name);
                 let namespace = self.artifact_repr.stack_name.clone();
 
-                format!("{}.{}.svc.cluster.local", name, namespace)
+                Expression::String(format!("{}.{}.svc.cluster.local", name, namespace))
             },
             "port" => {
                 let formatted_name = kebab_to_snake_case(&self.release_name);
                 let module = format!("{}_{}", formatted_name, &output_node.name);
 
-                format!("{}.status.0.port", module)
+                Expression::Raw(RawExpression::new(format!("data.{}.status.0.port", module)))
             }
             _ => {
                 panic!("Unable to map reserved value.")
@@ -176,7 +171,7 @@ impl<'a> Composer<'a> {
         let formatted_name = kebab_to_snake_case(&self.release_name);
         let block_name = format!("{}_{}", formatted_name, &output_node.name);
 
-        format!("{}.status.0.values.{}", block_name, kube_value)
+        format!("data.{}.status.0.values.{}", block_name, kube_value)
     }
 
     pub fn compose(&mut self) -> Result<(), Box<dyn std::error::Error>> {
@@ -350,33 +345,38 @@ impl<'a> Composer<'a> {
         Ok(true)
     }
 
-
-    fn create_input_blocks(&self, node: &ArtifactNodeRepr) -> Vec<Block> {
-        let mut input_blocks = Vec::new();
+    fn create_input_values(&self, node: &ArtifactNodeRepr) -> Vec<Object<ObjectKey, Expression>> {
+        let mut input_vals = Vec::<Object<ObjectKey, Expression>>::new();
         for (_, (spec, value)) in node.mapped_inputs.iter() {
             let input_address_result = InputAddress::try_from(value.clone().as_str());
+            
+            let mut input: Object<ObjectKey, Expression> = Object::new();
 
-            let value = match input_address_result {
+            input.insert(ObjectKey::String("name".to_string()), Expression::String(spec.clone()));
+
+            match input_address_result {
                 Ok(input_address) => {
                     if reserved_outputs().contains_key(input_address.property_specifier.as_str()) {
-                        self.k8s_value_from_reserved_input(input_address)
+                        let val = self.k8s_value_from_reserved_input(input_address);
+                        input.insert(ObjectKey::String("value".to_string()), val.clone());
+
                     } else {
-                        self.k8s_status_values_path_from_torb_input(input_address)
+                        let val = self.k8s_status_values_path_from_torb_input(input_address);
+
+                        input.insert(ObjectKey::String("value".to_string()), Expression::Raw(RawExpression::new(val.clone())));
                     }
                 },
-                Err(input) => {
-                    input
+                Err(input_result) => {
+                    input.insert(ObjectKey::String("value".to_string()), Expression::String(input_result));
                 },
             };
 
-            let block = Block::builder("set")
-                .add_attribute((spec, RawExpression::new(value.clone())))
-                .build();
-
-            input_blocks.push(block);
+            input_vals.push(input);
         }
 
-        input_blocks
+
+        input_vals
+
     }
 
     fn add_to_main_struct(
@@ -392,8 +392,6 @@ impl<'a> Composer<'a> {
             .unwrap()
             .to_string()
             .replace("_", "-");
-
-        let inputs = self.create_input_blocks(node);
 
         let mut attributes = vec![
             ("source", source),
@@ -422,6 +420,8 @@ impl<'a> Composer<'a> {
 
         let output_block = self.create_output_data_block(node)?;
 
+        let inputs = self.create_input_values(node);
+
         let mut builder = std::mem::take(&mut self.main_struct);
 
         builder = builder.add_block(
@@ -429,6 +429,7 @@ impl<'a> Composer<'a> {
                 .add_label(&name)
                 .add_attributes(attributes)
                 .add_attribute(("values", vec![""]))
+                .add_attribute(("inputs", inputs))
                 .build(),
         );
 

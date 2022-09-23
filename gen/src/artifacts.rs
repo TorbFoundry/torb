@@ -3,7 +3,6 @@ use crate::utils::torb_path;
 use base64ct::{Base64UrlUnpadded, Encoding};
 use indexmap::IndexMap;
 use std::collections::HashMap;
-use std::hash::Hash;
 use serde::{Deserialize, Serialize};
 use serde_yaml::{self};
 use sha2::{Digest, Sha256};
