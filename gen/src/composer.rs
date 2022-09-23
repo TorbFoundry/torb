@@ -118,10 +118,6 @@ impl<'a> Composer<'a> {
             stack_name, &torb_input_address.node_type, &torb_input_address.node_name
         );
 
-        println!("{:?}", self.artifact_repr.nodes.keys());
-        println!("{:?}", &torb_input_address);
-        println!("{:?}", output_node_fqn);
-
         self
             .artifact_repr
             .nodes
@@ -155,9 +151,6 @@ impl<'a> Composer<'a> {
         let output_node = self.get_node_for_output_value(&torb_input_address);
 
         let kube_value = if torb_input_address.node_property == "output" {
-
-            println!("{:?}", output_node.mapped_inputs);
-            println!("{:?}", &torb_input_address.property_specifier);
             let (kube_val, _) = output_node
                 .mapped_inputs
                 .get(&torb_input_address.property_specifier)
@@ -298,7 +291,6 @@ impl<'a> Composer<'a> {
         node: &ArtifactNodeRepr,
     ) -> Result<Block, Box<dyn std::error::Error>> {
         let snake_case_release_name = self.release_name.clone().replace("-", "_");
-        println!("{}", snake_case_release_name);
         let metadata_block = Block::builder("metadata")
             .add_attribute(("name", format!("{}-{}", &self.release_name, &node.name)))
             .build();
