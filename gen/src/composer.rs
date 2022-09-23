@@ -5,9 +5,7 @@ use memorable_wordlist;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{self, Write};
-use std::os::linux::raw;
 use std::path::Path;
-use indexmap::IndexMap;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -208,6 +206,11 @@ impl<'a> Composer<'a> {
         }
 
         self._copy_files_recursively(supporting_build_files_path, dest);
+
+        let provider_path = path.join("torb-artifacts/common/providers");
+        let dest = new_environment_path.clone();
+
+        self._copy_files_recursively(provider_path, dest);
 
         Ok(())
     }
