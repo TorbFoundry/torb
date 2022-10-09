@@ -2,7 +2,8 @@ mod utils;
 mod artifacts;
 mod resolver;
 mod composer;
-mod builder;
+mod deployer;
+mod vsc;
 
 use clap::{App, Arg, SubCommand};
 use dirs;
@@ -14,7 +15,7 @@ use thiserror::Error;
 use ureq;
 use resolver::{Resolver, ResolverConfig, StackGraph};
 use artifacts::{write_build_file, ArtifactRepr};
-use builder::{StackBuilder};
+use deployer::{StackDeployer};
 use composer::{Composer};
 use utils::{torb_path, normalize_name};
 
@@ -43,6 +44,13 @@ fn init() {
             .output()
             .expect("Failed to clone torb-artifacts");
     };
+
+    let torb_config_path = torb_path.join("config.yaml");
+    let torb_config_template = torb_path.join("torb-artifacts/config.template.yaml");
+
+    if !torb_config_path.exists() {
+        fs::copy(torb_config_template, torb_config_path).expect("Unable to copy config template file from ~/.torb/torb-artifacts/config.template.yaml. Please check that Torb has been initialized properly.");
+    }
 
     let environments_path = torb_path.join("environments");
 
@@ -93,9 +101,9 @@ fn resolve_stack(stack_yaml: &String) -> Result<StackGraph, Box<dyn std::error::
     resolver.resolve()
 }
 
-fn build_stack(build_artifact: ArtifactRepr, dryrun: bool) -> Result<(), Box<dyn std::error::Error>> {
-    let mut stack_builder = StackBuilder::new();
-    stack_builder.build_stack(&build_artifact, dryrun)
+fn deploy_stack(build_artifact: ArtifactRepr, dryrun: bool) -> Result<(), Box<dyn std::error::Error>> {
+    let mut stack_builder = StackDeployer::new();
+    stack_builder.deploy_stack(&build_artifact, dryrun)
 }
 
 fn compose_build_environment(build_hash: String, build_artifact: &ArtifactRepr) {
@@ -154,6 +162,22 @@ fn main() {
             SubCommand::with_name("init").about("Initialize Torb, download artifacts and tools."),
         )
         .subcommand(
+            SubCommand::with_name("create-repo")
+                .about("Create a new repository for a Torb stack.")
+                .arg(
+                    Arg::new("--name")
+                        .short('n')
+                        .takes_value(true)
+                        .help("Name of the repo to create."),
+                )
+                .arg(
+                    Arg::new("--local-only")
+                        .short('l')
+                        .takes_value(false)
+                        .help("Only create the repo locally."),
+                ),
+        )
+        .subcommand(
             SubCommand::with_name("build-stack")
                 .about("Build a stack from a stack definition file.")
                 .arg(
@@ -176,6 +200,17 @@ fn main() {
     match cli_matches.subcommand_name() {
         Some("init") => {
             init();
+        }
+        Some("create-repo") => {
+            let name_option = cli_matches
+                .subcommand_matches("create-repo")
+                .unwrap()
+                .value_of("--name");
+            
+            let local_option = cli_matches
+                .subcommand_matches("create-repo")
+                .unwrap()
+                .value_of("--local-only");
         }
         Some("build-stack") => {
             let stack_name_option = cli_matches

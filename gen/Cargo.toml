@@ -7,7 +7,6 @@ edition = "2021"
 [dependencies]
 tempfile = "3.3.0"
 dirs = "1.0.4"
-ureq = "2.5.0"
 clap = { version = "3.1.6", features = ["derive"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_yaml = "0.8"
@@ -18,3 +17,4 @@ serde_json = "1.0.85"
 hcl-rs = "0.6.5"
 indexmap = "1.9.1"
 memorable-wordlist = "0.1.7"
+ureq = { version = "2.5.0", features = ["json"] }
