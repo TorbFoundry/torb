@@ -253,7 +253,11 @@ impl<'a> Composer<'a> {
     }
 
     fn walk_artifact(&mut self, node: &ArtifactNodeRepr) -> Result<(), Box<dyn std::error::Error>> {
-        // We want to walk to the end of the dependencies before we compose the terraform environment.
+        // We want to walk to the end of the dependencies before we build. 
+        // This is because duplicate dependencies can exist, and we want to avoid building the same thing twice.
+        // By walking to the end we ensure that whichever copy is built first will be in the set of seen nodes.
+        // This let me avoid worrying about how to handle duplicate dependencies in the dependency tree data structure.
+        // -Ian
         for child in node.dependencies.iter() {
             self.walk_artifact(child)?
         }

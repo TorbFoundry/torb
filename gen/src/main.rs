@@ -2,8 +2,10 @@ mod utils;
 mod artifacts;
 mod resolver;
 mod composer;
+mod builder;
 mod deployer;
 mod vsc;
+mod config;
 
 use clap::{App, Arg, SubCommand};
 use dirs;
@@ -18,6 +20,9 @@ use artifacts::{write_build_file, ArtifactRepr};
 use deployer::{StackDeployer};
 use composer::{Composer};
 use utils::{torb_path, normalize_name};
+
+use crate::vsc::{GithubVSC, GitVersionControl};
+use crate::config::TORB_CONFIG;
 
 const VERSION: &'static str = env!("CARGO_PKG_VERSION");
 
@@ -84,6 +89,31 @@ fn init() {
     println!("Finished!")
 }
 
+fn create_repo(path: String, local_only: bool) {
+    if !std::path::Path::new(&path).exists() {
+        let vsc = GithubVSC::new(TORB_CONFIG.githubToken.clone(), TORB_CONFIG.githubUser.clone());
+        let repo_name = std::path::Path::new(&path).file_name().unwrap().to_str().unwrap();
+        vsc.create_repo(repo_name.to_string(), path.clone(), local_only).expect("Failed to create repo.");
+    } else {
+        println!("Repo already exists locally. Skipping creation.");
+
+    }    
+}
+
+fn checkout_stack(name: Option<&str>) {
+    match name {
+        Some(name) => {
+            let stack_yaml: String = pull_stack(name, false)
+                .expect("Failed to pull stack from torb-artifacts.");
+
+            fs::write("./stack.yaml", stack_yaml).expect("Failed to write stack.yaml.");
+        }
+        None => {
+            fs::write("./stack.yaml", "").expect("Failed to write stack.yaml");
+        }
+    }
+}
+
 fn resolve_stack(stack_yaml: &String) -> Result<StackGraph, Box<dyn std::error::Error>> {
     let stack_def_yaml: serde_yaml::Value = serde_yaml::from_str(stack_yaml).unwrap();
     let stack_name = stack_def_yaml.get("name").unwrap().as_str().unwrap();
@@ -109,6 +139,10 @@ fn deploy_stack(build_artifact: ArtifactRepr, dryrun: bool) -> Result<(), Box<dy
 fn compose_build_environment(build_hash: String, build_artifact: &ArtifactRepr) {
     let mut composer = Composer::new(build_hash, build_artifact);
     composer.compose().unwrap();
+}
+
+fn run_dependency_build_steps(build_hash: String, build_artifact: &ArtifactRepr) {
+
 }
 
 fn update_artifacts() {
@@ -165,26 +199,40 @@ fn main() {
             SubCommand::with_name("create-repo")
                 .about("Create a new repository for a Torb stack.")
                 .arg(
-                    Arg::new("--name")
-                        .short('n')
+                    Arg::with_name("path")
                         .takes_value(true)
-                        .help("Name of the repo to create."),
+                        .required(true)
+                        .index(1)
+                        .help("Path of the repo to create."),
                 )
                 .arg(
                     Arg::new("--local-only")
                         .short('l')
+                        .required(false)
                         .takes_value(false)
                         .help("Only create the repo locally."),
                 ),
         )
         .subcommand(
+            SubCommand::with_name("checkout-stack")
+                .about("Add a stack template to your current directory.")
+                .arg(
+                    Arg::with_name("name")
+                        .takes_value(true)
+                        .required(false)
+                        .index(1)
+                        .help("Name of the stack template to checkout."),
+                )
+        )    
+        .subcommand(
             SubCommand::with_name("build-stack")
                 .about("Build a stack from a stack definition file.")
                 .arg(
-                    Arg::new("--stack-name")
-                        .short('s')
+                    Arg::with_name("file")
                         .takes_value(true)
-                        .help("Name of the stack to build."),
+                        .required(true)
+                        .index(1)
+                        .help("File path of the stack definition file."),
                 )
                 .arg(
                     Arg::new("--dryrun")
@@ -202,36 +250,48 @@ fn main() {
             init();
         }
         Some("create-repo") => {
-            let name_option = cli_matches
+            let path_option = cli_matches
                 .subcommand_matches("create-repo")
                 .unwrap()
-                .value_of("--name");
+                .value_of("path");
             
             let local_option = cli_matches
                 .subcommand_matches("create-repo")
                 .unwrap()
                 .value_of("--local-only");
+
+                create_repo(path_option.unwrap().to_string(), local_option.is_some());
+        }
+        Some("checkout-stack") => {
+            let name_option = cli_matches
+                .subcommand_matches("checkout-stack")
+                .unwrap()
+                .value_of("name");
+
+            checkout_stack(name_option);
         }
         Some("build-stack") => {
-            let stack_name_option = cli_matches
+            let file_path_option = cli_matches
                 .subcommand_matches("build-stack")
                 .unwrap()
-                .value_of("--stack-name");
+                .value_of("file");
             
             let dryrun_option = cli_matches
                 .subcommand_matches("build-stack")
                 .unwrap()
                 .value_of("--dryrun");
 
-            if let Some(stack_name) = stack_name_option {
-                println!("Attempting to pull and build stack: {}", stack_name);
-                let stack_yaml: String = pull_stack(stack_name, false)
-                    .expect("Failed to pull stack from torb-artifacts.");
+            if let Some(file_path) = file_path_option {
+                println!("Attempting to read and build stack: {}", file_path);
+                let contents = fs::read_to_string(file_path).expect("Something went wrong reading the stack file.");
+                let stack_yaml = serde_yaml::from_str(&contents).expect("Unable to parse stack file.");
                 let graph = resolve_stack(&stack_yaml).unwrap();
 
                 let (build_hash, build_filename, build_artifact) = write_build_file(graph);
 
                 compose_build_environment(build_hash, &build_artifact);
+
+                run_dependency_build_steps(build_hash, &build_artifact);
 
                 //build_stack(build_artifact, dryrun_option.is_some()).unwrap()
             }
