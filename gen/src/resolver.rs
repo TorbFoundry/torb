@@ -51,11 +51,6 @@ impl ResolverConfig {
 //     tool_name: String,
 //     tool_config: IndexMap<String, String>,
 // }
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct BuildStep {
-    dockerfile: String,
-    registry: String,
-}
 
 #[derive(Clone, Debug)]
 pub struct StackConfig {
@@ -357,6 +352,8 @@ impl Resolver {
             graph.name.clone(),
             graph.version.clone(),
             "stack".to_string(),
+            None,
+            None,
             None,
             IndexMap::<String, Option<IndexMap<String, String>>>::new(),
             IndexMap::<String, (String, String)>::new(),

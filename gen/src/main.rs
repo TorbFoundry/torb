@@ -1,6 +1,7 @@
 mod utils;
 mod artifacts;
 mod resolver;
+mod initializer;
 mod composer;
 mod builder;
 mod deployer;
@@ -114,6 +115,10 @@ fn checkout_stack(name: Option<&str>) {
     }
 }
 
+fn init_stack(path: &str) {
+
+}
+
 fn resolve_stack(stack_yaml: &String) -> Result<StackGraph, Box<dyn std::error::Error>> {
     let stack_def_yaml: serde_yaml::Value = serde_yaml::from_str(stack_yaml).unwrap();
     let stack_name = stack_def_yaml.get("name").unwrap().as_str().unwrap();
@@ -225,6 +230,17 @@ fn main() {
                 )
         )    
         .subcommand(
+            SubCommand::with_name("init-stack")
+                .about("Run any init steps for a stack's dependencies.")
+                .arg(
+                    Arg::with_name("file")
+                        .takes_value(true)
+                        .required(true)
+                        .index(1)
+                        .help("File path of the stack definition file."),
+                )
+        )
+        .subcommand(
             SubCommand::with_name("build-stack")
                 .about("Build a stack from a stack definition file.")
                 .arg(
@@ -270,6 +286,14 @@ fn main() {
 
             checkout_stack(name_option);
         }
+        Some("init-stack") => {
+            let file_path_option = cli_matches
+                .subcommand_matches("init-stack")
+                .unwrap()
+                .value_of("file");
+
+            init_stack(file_path_option.unwrap())
+        }
         Some("build-stack") => {
             let file_path_option = cli_matches
                 .subcommand_matches("build-stack")
@@ -289,9 +313,9 @@ fn main() {
 
                 let (build_hash, build_filename, build_artifact) = write_build_file(graph);
 
-                compose_build_environment(build_hash, &build_artifact);
+                compose_build_environment(build_hash.clone(), &build_artifact);
 
-                run_dependency_build_steps(build_hash, &build_artifact);
+                run_dependency_build_steps(build_hash.clone(), &build_artifact);
 
                 //build_stack(build_artifact, dryrun_option.is_some()).unwrap()
             }

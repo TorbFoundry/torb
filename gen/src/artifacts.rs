@@ -1,4 +1,4 @@
-use crate::resolver::{BuildStep, DependencyNodeDependencies, StackGraph};
+use crate::resolver::{DependencyNodeDependencies, StackGraph};
 use crate::utils::torb_path;
 use base64ct::{Base64UrlUnpadded, Encoding};
 use indexmap::IndexMap;
@@ -10,12 +10,27 @@ use std::fs;
 use std::io::Write;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct InitStep {
+    script: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct BuildStep {
+    script_path: String,
+    dockerfile: String,
+    registry: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ArtifactNodeRepr {
     #[serde(default = "String::new")]
     pub fqn: String,
     pub name: String,
     pub version: String,
     pub kind: String,
+    pub lang: Option<String>,
+    #[serde(alias = "init")]
+    pub init_step: Option<InitStep>,
     #[serde(alias = "build")]
     pub build_step: Option<BuildStep>,
     #[serde(alias = "deploy")]
@@ -42,6 +57,8 @@ impl ArtifactNodeRepr {
         name: String,
         version: String,
         kind: String,
+        lang: Option<String>,
+        init_step: Option<InitStep>,
         build_step: Option<BuildStep>,
         deploy_steps: IndexMap<String, Option<IndexMap<String, String>>>,
         inputs: IndexMap<String, (String, String)>,
@@ -52,9 +69,11 @@ impl ArtifactNodeRepr {
     ) -> ArtifactNodeRepr {
         ArtifactNodeRepr {
             fqn: fqn,
-            name: name.to_string(),
-            version: version.to_string(),
-            kind: kind.to_string(),
+            name: name,
+            version: version,
+            kind: kind,
+            lang: lang,
+            init_step: init_step,
             build_step: build_step,
             deploy_steps: deploy_steps,
             mapped_inputs: inputs,
