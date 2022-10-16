@@ -1,29 +1,30 @@
-mod utils;
 mod artifacts;
-mod resolver;
-mod initializer;
-mod composer;
 mod builder;
-mod deployer;
-mod vsc;
+mod composer;
 mod config;
+mod deployer;
+mod initializer;
+mod resolver;
+mod utils;
+mod vsc;
 
+use artifacts::{deserialize_stack_yaml_into_artifact, write_build_file, ArtifactRepr};
 use clap::{App, Arg, SubCommand};
+use composer::Composer;
+use deployer::StackDeployer;
 use dirs;
+use initializer::StackInitializer;
 use std::fs;
 use std::fs::File;
 use std::io;
 use std::process::Command;
 use thiserror::Error;
 use ureq;
-use resolver::{Resolver, ResolverConfig, StackGraph};
-use artifacts::{write_build_file, ArtifactRepr};
-use deployer::{StackDeployer};
-use composer::{Composer};
-use utils::{torb_path, normalize_name};
+use utils::{buildstate_path_or_create, torb_path};
 
-use crate::vsc::{GithubVSC, GitVersionControl};
+use crate::artifacts::load_build_file;
 use crate::config::TORB_CONFIG;
+use crate::vsc::{GitVersionControl, GithubVSC};
 
 const VERSION: &'static str = env!("CARGO_PKG_VERSION");
 
@@ -80,11 +81,9 @@ fn init() {
 
         let mut unzip_cmd = Command::new("unzip");
 
-        unzip_cmd
-            .arg(&tf_path)
-            .current_dir(&torb_path);
+        unzip_cmd.arg(&tf_path).current_dir(&torb_path);
 
-        let _unzip_cmd_out =  unzip_cmd.output().expect("Failed to unzip terraform.");
+        let _unzip_cmd_out = unzip_cmd.output().expect("Failed to unzip terraform.");
     }
 
     println!("Finished!")
@@ -92,20 +91,27 @@ fn init() {
 
 fn create_repo(path: String, local_only: bool) {
     if !std::path::Path::new(&path).exists() {
-        let vsc = GithubVSC::new(TORB_CONFIG.githubToken.clone(), TORB_CONFIG.githubUser.clone());
-        let repo_name = std::path::Path::new(&path).file_name().unwrap().to_str().unwrap();
-        vsc.create_repo(repo_name.to_string(), path.clone(), local_only).expect("Failed to create repo.");
+        let vsc = GithubVSC::new(
+            TORB_CONFIG.githubToken.clone(),
+            TORB_CONFIG.githubUser.clone(),
+        );
+        let repo_name = std::path::Path::new(&path)
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap();
+        vsc.create_repo(repo_name.to_string(), path.clone(), local_only)
+            .expect("Failed to create repo.");
     } else {
         println!("Repo already exists locally. Skipping creation.");
-
-    }    
+    }
 }
 
 fn checkout_stack(name: Option<&str>) {
     match name {
         Some(name) => {
-            let stack_yaml: String = pull_stack(name, false)
-                .expect("Failed to pull stack from torb-artifacts.");
+            let stack_yaml: String =
+                pull_stack(name, false).expect("Failed to pull stack from torb-artifacts.");
 
             fs::write("./stack.yaml", stack_yaml).expect("Failed to write stack.yaml.");
         }
@@ -115,28 +121,28 @@ fn checkout_stack(name: Option<&str>) {
     }
 }
 
-fn init_stack(path: &str) {
+fn init_stack(file_path: String) {
+    println!("Attempting to read or create buildstate folder...");
+    buildstate_path_or_create();
 
+    println!("Attempting to read stack file...");
+    let stack_yaml = fs::read_to_string(&file_path).expect("Failed to read stack.yaml.");
+
+    println!("Reading stack into internal representation...");
+    let artifact = deserialize_stack_yaml_into_artifact(&stack_yaml)
+        .expect("Failed to read stack into internal representation.");
+
+    let mut stack_initializer = StackInitializer::new(&artifact);
+
+    stack_initializer
+        .run_node_init_steps()
+        .expect("Failed to initialize stack.");
 }
 
-fn resolve_stack(stack_yaml: &String) -> Result<StackGraph, Box<dyn std::error::Error>> {
-    let stack_def_yaml: serde_yaml::Value = serde_yaml::from_str(stack_yaml).unwrap();
-    let stack_name = stack_def_yaml.get("name").unwrap().as_str().unwrap();
-    let stack_description = stack_def_yaml.get("description").unwrap().as_str().unwrap();
-    let resolver_conf = ResolverConfig::new(
-        false,
-        normalize_name(stack_name),
-        stack_description.to_string(),
-        stack_def_yaml.clone(),
-        VERSION.to_string(),
-    );
-
-    let resolver = Resolver::new(&resolver_conf);
-
-    resolver.resolve()
-}
-
-fn deploy_stack(build_artifact: ArtifactRepr, dryrun: bool) -> Result<(), Box<dyn std::error::Error>> {
+fn deploy_stack(
+    build_artifact: ArtifactRepr,
+    dryrun: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
     let mut stack_builder = StackDeployer::new();
     stack_builder.deploy_stack(&build_artifact, dryrun)
 }
@@ -146,9 +152,7 @@ fn compose_build_environment(build_hash: String, build_artifact: &ArtifactRepr) 
     composer.compose().unwrap();
 }
 
-fn run_dependency_build_steps(build_hash: String, build_artifact: &ArtifactRepr) {
-
-}
+fn run_dependency_build_steps(build_hash: String, build_artifact: &ArtifactRepr, dryrun: bool) {}
 
 fn update_artifacts() {
     let torb_path_buf = torb_path();
@@ -227,8 +231,8 @@ fn main() {
                         .required(false)
                         .index(1)
                         .help("Name of the stack template to checkout."),
-                )
-        )    
+                ),
+        )
         .subcommand(
             SubCommand::with_name("init-stack")
                 .about("Run any init steps for a stack's dependencies.")
@@ -238,7 +242,7 @@ fn main() {
                         .required(true)
                         .index(1)
                         .help("File path of the stack definition file."),
-                )
+                ),
         )
         .subcommand(
             SubCommand::with_name("build-stack")
@@ -270,13 +274,13 @@ fn main() {
                 .subcommand_matches("create-repo")
                 .unwrap()
                 .value_of("path");
-            
+
             let local_option = cli_matches
                 .subcommand_matches("create-repo")
                 .unwrap()
                 .value_of("--local-only");
 
-                create_repo(path_option.unwrap().to_string(), local_option.is_some());
+            create_repo(path_option.unwrap().to_string(), local_option.is_some());
         }
         Some("checkout-stack") => {
             let name_option = cli_matches
@@ -292,32 +296,38 @@ fn main() {
                 .unwrap()
                 .value_of("file");
 
-            init_stack(file_path_option.unwrap())
+            init_stack(file_path_option.unwrap().to_string())
         }
         Some("build-stack") => {
             let file_path_option = cli_matches
                 .subcommand_matches("build-stack")
                 .unwrap()
                 .value_of("file");
-            
+
             let dryrun_option = cli_matches
                 .subcommand_matches("build-stack")
                 .unwrap()
                 .value_of("--dryrun");
 
             if let Some(file_path) = file_path_option {
+                println!("Attempting to read or create buildstate folder...");
+                buildstate_path_or_create();
                 println!("Attempting to read and build stack: {}", file_path);
-                let contents = fs::read_to_string(file_path).expect("Something went wrong reading the stack file.");
-                let stack_yaml = serde_yaml::from_str(&contents).expect("Unable to parse stack file.");
-                let graph = resolve_stack(&stack_yaml).unwrap();
+                let contents = fs::read_to_string(file_path)
+                    .expect("Something went wrong reading the stack file.");
 
-                let (build_hash, build_filename, build_artifact) = write_build_file(graph);
+                let (build_hash, build_filename, _) = write_build_file(contents);
+
+                let (_, _, build_artifact) =
+                    load_build_file(build_filename).expect("Unable to load build file.");
+
+                run_dependency_build_steps(
+                    build_hash.clone(),
+                    &build_artifact,
+                    dryrun_option.is_some(),
+                );
 
                 compose_build_environment(build_hash.clone(), &build_artifact);
-
-                run_dependency_build_steps(build_hash.clone(), &build_artifact);
-
-                //build_stack(build_artifact, dryrun_option.is_some()).unwrap()
             }
         }
         Some("list-stacks") => {

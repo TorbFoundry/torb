@@ -1,5 +1,6 @@
 use crate::artifacts::{ArtifactRepr, ArtifactNodeRepr};
 use std::collections::HashSet;
+use crate::utils::{run_command_in_user_shell, torb_path};
 
 pub struct StackInitializer<'a> {
     artifact: &'a ArtifactRepr,
@@ -14,17 +15,23 @@ impl<'a> StackInitializer<'a> {
         }
     }
 
-    pub fn run_node_init_steps(&mut self) -> Result<String, Box<dyn std::error::Error>> {
-        for node in self.artifact.deploys.iter() {
-            self.walk_artifact(node)?;
+    pub fn run_node_init_steps(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        if !std::path::Path::new("./.stack_initilized").exists() {
+            for node in self.artifact.deploys.iter() {
+                self.walk_artifact(node)?;
+            }
+
+            std::fs::write("./.stack_initialized", "")?;
         }
 
-        Ok("".to_string())
+        Ok(())
     }
 
     fn initalize_node(&self, node: &ArtifactNodeRepr) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(step) = node.init_step.clone() {
-            ()
+            let script_contents = std::fs::read_to_string(step.script)?;
+
+            run_command_in_user_shell(script_contents)?;
         };
 
         Ok(())
@@ -50,7 +57,7 @@ impl<'a> StackInitializer<'a> {
                 } else {
                     Err(Box::new(std::io::Error::new(
                         std::io::ErrorKind::Other,
-                        "Step already built.",
+                        "Step already initialized.",
                     )))
                 }
             })?;

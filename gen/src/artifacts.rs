@@ -1,5 +1,5 @@
-use crate::resolver::{DependencyNodeDependencies, StackGraph};
-use crate::utils::torb_path;
+use crate::resolver::{DependencyNodeDependencies, StackGraph, resolve_stack};
+use crate::utils::{checksum, buildstate_path_or_create};
 use base64ct::{Base64UrlUnpadded, Encoding};
 use indexmap::IndexMap;
 use std::collections::HashMap;
@@ -8,10 +8,18 @@ use serde_yaml::{self};
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::Write;
+use thiserror::Error;
+
+#[derive(Error, Debug)]
+pub enum TorbArtifactErrors {
+    #[error("Hash of loaded build file does not match hash of file on disk.")]
+    LoadChecksumFailed,
+
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct InitStep {
-    script: String,
+    pub script: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -272,12 +280,42 @@ fn walk_nodes(node: &ArtifactNodeRepr, graph: &StackGraph, node_map: &mut HashMa
     return new_node;
 }
 
-pub fn write_build_file(graph: StackGraph) -> (String, String, ArtifactRepr) {
-    println!("Creating build file...");
-    let artifact = walk_graph(&graph).unwrap();
+
+pub fn load_build_file(filename: String) -> Result<(String, String, ArtifactRepr), Box<dyn std::error::Error>> {
+    let buildstate_path = buildstate_path_or_create();
+    let buildfiles_path = buildstate_path.join("buildfiles");
+    let path = buildfiles_path.join(filename.clone());
+
+
+    let file = std::fs::File::open(path)?;
+
+    let hash = filename.clone().split("_").collect::<Vec<&str>>()[0].to_string();
+
+    let reader = std::io::BufReader::new(file);
+
+    let artifact: ArtifactRepr = serde_yaml::from_reader(reader)?;
     let string_rep = serde_yaml::to_string(&artifact).unwrap();
-    let torb_path = torb_path();
-    let outfile_dir_path = torb_path.join("buildfiles");
+
+    if checksum(string_rep, hash.clone()) {
+        Ok((hash, filename, artifact))
+    } else {
+        Err(Box::new(TorbArtifactErrors::LoadChecksumFailed))
+    }
+}
+
+pub fn deserialize_stack_yaml_into_artifact(stack_yaml: &String) -> Result<ArtifactRepr, Box<dyn std::error::Error>> {
+    let graph: StackGraph = resolve_stack(stack_yaml)?;
+    let artifact = walk_graph(&graph)?;
+    Ok(artifact)
+}
+
+pub fn write_build_file(stack_yaml: String) -> (String, String, ArtifactRepr) {
+    println!("Creating build file...");
+    let artifact = deserialize_stack_yaml_into_artifact(&stack_yaml).unwrap();
+    let string_rep = serde_yaml::to_string(&artifact).unwrap();
+    let current_dir = std::env::current_dir().unwrap();
+    let current_dir_state_dir = current_dir.join(".torb_buildstate");
+    let outfile_dir_path = current_dir_state_dir.join("buildfiles");
     let hash = Sha256::digest(string_rep.as_bytes());
     let hash_base64 = Base64UrlUnpadded::encode_string(&hash);
     let filename = format!("{}_{}.yaml", hash_base64, "outfile");

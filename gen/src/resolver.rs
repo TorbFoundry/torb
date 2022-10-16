@@ -1,13 +1,30 @@
 use serde::{Deserialize, Serialize};
 use serde_yaml::{self, Value};
 use std::process::Command;
-use std::collections::{HashSet, HashMap};
+use std::collections::{HashMap};
 use indexmap::{IndexMap};
 use std::{error::Error, path::PathBuf};
 use thiserror::Error;
-use crate::artifacts::{ArtifactNodeRepr, ArtifactRepr};
+use crate::artifacts::{ArtifactNodeRepr};
 use crate::utils::{normalize_name, torb_path};
 
+const VERSION: &'static str = env!("CARGO_PKG_VERSION");
+pub fn resolve_stack(stack_yaml: &String) -> Result<StackGraph, Box<dyn std::error::Error>> {
+    let stack_def_yaml: serde_yaml::Value = serde_yaml::from_str(stack_yaml).unwrap();
+    let stack_name = stack_def_yaml.get("name").unwrap().as_str().unwrap();
+    let stack_description = stack_def_yaml.get("description").unwrap().as_str().unwrap();
+    let resolver_conf = ResolverConfig::new(
+        false,
+        normalize_name(stack_name),
+        stack_description.to_string(),
+        stack_def_yaml.clone(),
+        VERSION.to_string(),
+    );
+
+    let resolver = Resolver::new(&resolver_conf);
+
+    resolver.resolve()
+}
 
 #[derive(Error, Debug)]
 pub enum TorbResolverErrors {
