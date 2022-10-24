@@ -166,18 +166,22 @@ fn update_artifacts() {
         .expect("Failed to pull torb-artifacts");
 }
 
-fn pull_stack(
-    stack_name: &str,
-    fail_not_found: bool,
-) -> Result<String, Box<dyn std::error::Error>> {
-    let home_dir = dirs::home_dir().unwrap();
-    let torb_path = home_dir.join(".torb");
+fn load_stack_manifest() -> serde_yaml::Value {
+    let torb_path = torb_path();
     let artifacts_path = torb_path.join("torb-artifacts");
     let stack_manifest_path = artifacts_path.join("stacks").join("manifest.yaml");
     let stack_manifest_contents = fs::read_to_string(&stack_manifest_path).unwrap();
     let stack_manifest_yaml: serde_yaml::Value =
         serde_yaml::from_str(&stack_manifest_contents).unwrap();
-    let stacks = stack_manifest_yaml.get("stacks").unwrap();
+    
+    stack_manifest_yaml.get("stacks").unwrap().clone()
+}
+
+fn pull_stack(
+    stack_name: &str,
+    fail_not_found: bool,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let stacks = load_stack_manifest();
     let stack_entry = stacks.get(stack_name);
 
     if stack_entry.is_none() {
@@ -188,6 +192,8 @@ fn pull_stack(
         update_artifacts();
         return pull_stack(stack_name, true);
     } else {
+        let torb_path = torb_path();
+        let artifacts_path = torb_path.join("torb-artifacts");
         let stack_entry_str = stack_entry.unwrap().as_str().unwrap();
         let stack_contents = fs::read(artifacts_path.join("stacks").join(stack_entry_str))
             .map(|s| String::from_utf8(s).unwrap())?;
@@ -332,6 +338,10 @@ fn main() {
         }
         Some("list-stacks") => {
             println!("Listing stacks");
+            let stack_manifest = load_stack_manifest();
+            for (key, _) in stack_manifest.as_mapping().unwrap().iter() {
+                println!("{}", key.as_str().unwrap());
+            }
         }
         Some("version") => {
             println!("Torb Version: {}", VERSION);

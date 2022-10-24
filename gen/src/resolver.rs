@@ -315,12 +315,11 @@ impl Resolver {
         let torb_yaml_path = service_path.join("torb.yaml");
         let torb_yaml = std::fs::read_to_string(&torb_yaml_path)?;
         let mut node: ArtifactNodeRepr = serde_yaml::from_str(torb_yaml.as_str())?;
-        println!("Resolving service: {}", node.fqn);
+        node.fqn = format!("{}.{}.{}", stack_name, stack_kind_name, node_name);
         let node_fp = torb_yaml_path
             .to_str()
             .ok_or("Could not convert path to string.")?
             .to_string();
-        node.fqn = format!("{}.{}.{}", stack_name, stack_kind_name, node_name);
         node.file_path = node_fp;
         node.validate_map_and_set_inputs(inputs);
 
@@ -509,7 +508,7 @@ impl Resolver {
                                 project_name,
                                 project_value,
                             )
-                            .unwrap();
+                            .expect("Failed to resolve project node.");
                         graph.add_project(&project_node);
                         graph.add_all_incoming_edges_downstream(stack_name.clone(), &project_node);
                     }

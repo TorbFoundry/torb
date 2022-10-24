@@ -19,7 +19,7 @@ pub enum TorbArtifactErrors {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct InitStep {
-    pub script: String,
+    pub steps: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -38,7 +38,7 @@ pub struct ArtifactNodeRepr {
     pub kind: String,
     pub lang: Option<String>,
     #[serde(alias = "init")]
-    pub init_step: Option<InitStep>,
+    pub init_step: Option<Vec<String>>,
     #[serde(alias = "build")]
     pub build_step: Option<BuildStep>,
     #[serde(alias = "deploy")]
@@ -66,7 +66,7 @@ impl ArtifactNodeRepr {
         version: String,
         kind: String,
         lang: Option<String>,
-        init_step: Option<InitStep>,
+        init_step: Option<Vec<String>>,
         build_step: Option<BuildStep>,
         deploy_steps: IndexMap<String, Option<IndexMap<String, String>>>,
         inputs: IndexMap<String, (String, String)>,
