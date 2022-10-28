@@ -379,7 +379,8 @@ impl Resolver {
                 .to_str()
                 .ok_or("Could not convert path to string.")?
                 .to_string(),
-            Some(graph)
+            Some(graph),
+            Some(Vec::new())
         );
 
         Ok(node)

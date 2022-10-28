@@ -57,6 +57,7 @@ pub struct ArtifactNodeRepr {
     pub file_path: String,
     #[serde(skip)]
     pub stack_graph: Option<StackGraph>,
+    pub files: Option<Vec<String>>,
 }
 
 impl ArtifactNodeRepr {
@@ -74,6 +75,7 @@ impl ArtifactNodeRepr {
         outputs: Vec<String>,
         file_path: String,
         stack_graph: Option<StackGraph>,
+        files: Option<Vec<String>>,
     ) -> ArtifactNodeRepr {
         ArtifactNodeRepr {
             fqn: fqn,
@@ -95,6 +97,7 @@ impl ArtifactNodeRepr {
             },
             file_path,
             stack_graph,
+            files
         }
     }
 
