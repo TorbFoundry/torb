@@ -12,7 +12,6 @@ use artifacts::{deserialize_stack_yaml_into_artifact, write_build_file, Artifact
 use clap::{App, Arg, SubCommand};
 use composer::Composer;
 use deployer::StackDeployer;
-use dirs;
 use initializer::StackInitializer;
 use std::fs;
 use std::fs::File;
@@ -91,16 +90,17 @@ fn init() {
 
 fn create_repo(path: String, local_only: bool) {
     if !std::path::Path::new(&path).exists() {
-        let vsc = GithubVSC::new(
+        let mut vsc = GithubVSC::new(
             TORB_CONFIG.githubToken.clone(),
             TORB_CONFIG.githubUser.clone(),
         );
-        let repo_name = std::path::Path::new(&path)
-            .file_name()
-            .unwrap()
-            .to_str()
-            .unwrap();
-        vsc.create_repo(repo_name.to_string(), path.clone(), local_only)
+
+        let mut buf = std::path::PathBuf::new();
+        buf.push(path);
+
+        vsc.set_cwd(buf);
+
+        vsc.create_repo(local_only)
             .expect("Failed to create repo.");
     } else {
         println!("Repo already exists locally. Skipping creation.");

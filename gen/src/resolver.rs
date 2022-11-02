@@ -83,13 +83,6 @@ pub struct DependencyNodeDependencies {
 }
 
 impl DependencyNodeDependencies {
-    pub fn new() -> DependencyNodeDependencies {
-        DependencyNodeDependencies {
-            services: None,
-            projects: None,
-            stacks: None,
-        }
-    }
 }
 
 #[derive(Clone, Debug)]
