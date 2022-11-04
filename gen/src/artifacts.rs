@@ -24,9 +24,10 @@ pub struct InitStep {
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct BuildStep {
-    script_path: String,
-    dockerfile: String,
-    registry: String,
+    pub script_path: String,
+    pub dockerfile: String,
+    pub tag: String,
+    pub registry: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

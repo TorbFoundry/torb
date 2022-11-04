@@ -4,7 +4,6 @@ use hcl::{Block, Body, Expression, RawExpression, Value, Object, ObjectKey};
 use memorable_wordlist;
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::io::{self, Write};
 use std::path::Path;
 use thiserror::Error;
 

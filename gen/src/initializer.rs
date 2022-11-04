@@ -1,6 +1,6 @@
 use crate::artifacts::{ArtifactRepr, ArtifactNodeRepr};
 use std::{collections::HashSet, env::current_dir};
-use crate::utils::{run_command_in_user_shell, buildstate_path_or_create, torb_path};
+use crate::utils::{run_command_in_user_shell, buildstate_path_or_create};
 
 const TOKEN: &str = "TORB";
 
