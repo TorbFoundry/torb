@@ -1,7 +1,9 @@
 use crate::artifacts::{ArtifactNodeRepr, ArtifactRepr};
+use crate::utils::{CommandPipeline};
 use std::collections::HashSet;
 use thiserror::Error;
 use std::process::Command;
+
 
 #[derive(Error, Debug)]
 pub enum TorbBuilderErrors {
@@ -35,7 +37,9 @@ impl<'a> StackBuilder<'a> {
     fn build_node(&self, node: &ArtifactNodeRepr) -> Result<(), TorbBuilderErrors> {
         if let Some(step) = node.build_step.clone() {
             if step.dockerfile != "" {
-                self.build_docker(step.dockerfile, step.tag, step.registry)
+                self.build_docker(step.dockerfile, step.tag, step.registry).map_err(|err| {
+                    TorbBuilderErrors::UnableToBuildDockerfile { response: err.to_string() }
+                })
             } else if step.script_path != "" {
                 self.build_script(step.script_path)
             } else {
@@ -46,18 +50,15 @@ impl<'a> StackBuilder<'a> {
         }
     }
 
-    fn build_docker(&self, dockerfile: String, tag: String, registry: String) -> Result<(), TorbBuilderErrors> {
-        let command = Command::new("docker")
-            .arg("build")
-            .arg(dockerfile)
-            .arg("-t")
-            .arg(tag)
-            .output()
-            .map_err(|err| {
-                                
-            });
+    fn build_docker(&self, dockerfile: String, tag: String, registry: String) -> Result<(), Box<dyn std::error::Error>> {
+        let commands = vec![
+            vec!["docker", "build", &dockerfile, "-t", &tag],
+            vec!["docker", "push", &registry, &tag]
+        ];
 
-        
+        let mut pipeline = CommandPipeline::new(Some(commands));
+
+        pipeline.execute();
 
         Ok(())
     }
