@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use std::process::Command;
 use thiserror::Error;
 use ureq::{AgentBuilder};
+use crate::utils::CommandPipeline;
 
 #[derive(Error, Debug)]
 pub enum TorbVSCErrors {
@@ -45,6 +46,10 @@ pub trait GitVersionControlHelpers: private::Sealed {
 
         fs::File::create(&readme_path).unwrap();
         fs::write(&readme_path, contents).unwrap();
+
+        let commands = vec![
+            vec!["git", "add", "./README.md"]
+        ];
 
         let git_add_readme = Command::new("git")
             .arg("add")
