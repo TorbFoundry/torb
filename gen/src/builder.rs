@@ -1,9 +1,9 @@
 use crate::artifacts::{ArtifactNodeRepr, ArtifactRepr};
-use crate::utils::{CommandPipeline};
+use crate::utils::{run_command_in_user_shell, CommandPipeline};
 use std::collections::HashSet;
+use std::fs;
+use std::process::{Command, Output};
 use thiserror::Error;
-use std::process::Command;
-
 
 #[derive(Error, Debug)]
 pub enum TorbBuilderErrors {
@@ -15,18 +15,16 @@ pub enum TorbBuilderErrors {
     MustDefineDockerfileOrBuildScript,
     #[error("The node has already been built. This theoretically should never be hit, so please ping the maintainers.")]
     NodeAlreadyBuilt,
-    #[error("Failed to build dockerfile. Reason: {reason:?}")]
-    FailedDockerBuild { reason: String }
 }
 
-struct StackBuilder<'a> {
+pub struct StackBuilder<'a> {
     artifact: &'a ArtifactRepr,
     built: HashSet<String>,
     dryrun: bool,
 }
 
 impl<'a> StackBuilder<'a> {
-    fn new(artifact: &'a ArtifactRepr, dryrun: bool) -> StackBuilder<'a> {
+    pub fn new(artifact: &'a ArtifactRepr, dryrun: bool) -> StackBuilder<'a> {
         StackBuilder {
             artifact: artifact,
             built: HashSet::new(),
@@ -34,14 +32,21 @@ impl<'a> StackBuilder<'a> {
         }
     }
 
+    pub fn build(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        for node in self.artifact.deploys.iter() {
+            self.walk_artifact(node)?;
+        }
+
+        Ok(())
+    }
+
     fn build_node(&self, node: &ArtifactNodeRepr) -> Result<(), TorbBuilderErrors> {
         if let Some(step) = node.build_step.clone() {
             if step.dockerfile != "" {
-                self.build_docker(step.dockerfile, step.tag, step.registry).map_err(|err| {
-                    TorbBuilderErrors::UnableToBuildDockerfile { response: err.to_string() }
-                })
+                self.build_docker(step.dockerfile, step.tag, step.registry)
+                    .and_then(|_| Ok(()))
             } else if step.script_path != "" {
-                self.build_script(step.script_path)
+                self.build_script(step.script_path).and_then(|_| Ok(()))
             } else {
                 Err(TorbBuilderErrors::MustDefineDockerfileOrBuildScript)
             }
@@ -50,21 +55,54 @@ impl<'a> StackBuilder<'a> {
         }
     }
 
-    fn build_docker(&self, dockerfile: String, tag: String, registry: String) -> Result<(), Box<dyn std::error::Error>> {
+    fn build_docker(
+        &self,
+        dockerfile: String,
+        tag: String,
+        registry: String,
+    ) -> Result<Vec<Output>, TorbBuilderErrors> {
         let commands = vec![
             vec!["docker", "build", &dockerfile, "-t", &tag],
-            vec!["docker", "push", &registry, &tag]
+            vec!["docker", "push", &registry, &tag],
         ];
 
-        let mut pipeline = CommandPipeline::new(Some(commands));
+        if self.dryrun {
+            println!("{:?}", commands);
 
-        pipeline.execute();
+            Ok(vec![])
+        } else {
+            let mut pipeline = CommandPipeline::new(Some(commands));
 
-        Ok(())
+            pipeline
+                .execute()
+                .map_err(|err| TorbBuilderErrors::UnableToBuildDockerfile {
+                    response: err.to_string(),
+                })
+        }
     }
 
-    fn build_script(&self, script_path: String) -> Result<(), TorbBuilderErrors> {
-        Ok(())
+    fn build_script(&self, script_path: String) -> Result<Output, TorbBuilderErrors> {
+        let contents = fs::read_to_string(script_path).unwrap();
+
+        if self.dryrun {
+            println!("{:?}", contents);
+
+            let out = Command::new("")
+                .output()
+                .expect("Failed to run nop command for build script dryrun.");
+
+            Ok(out)
+        } else {
+            let lines: Vec<&str> = contents.split("\n").collect();
+
+            let script_string = lines.join(";");
+
+            run_command_in_user_shell(script_string).map_err(|err| {
+                TorbBuilderErrors::UnableToBuildBuildScript {
+                    response: err.to_string(),
+                }
+            })
+        }
     }
 
     fn walk_artifact(&mut self, node: &ArtifactNodeRepr) -> Result<(), Box<dyn std::error::Error>> {

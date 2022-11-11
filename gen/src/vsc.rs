@@ -47,10 +47,6 @@ pub trait GitVersionControlHelpers: private::Sealed {
         fs::File::create(&readme_path).unwrap();
         fs::write(&readme_path, contents).unwrap();
 
-        let commands = vec![
-            vec!["git", "add", "./README.md"]
-        ];
-
         let git_add_readme = Command::new("git")
             .arg("add")
             .arg("./README.md")

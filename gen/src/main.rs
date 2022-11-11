@@ -24,6 +24,7 @@ use utils::{buildstate_path_or_create, torb_path};
 use crate::artifacts::load_build_file;
 use crate::config::TORB_CONFIG;
 use crate::vsc::{GitVersionControl, GithubVSC};
+use crate::builder::{StackBuilder};
 
 const VERSION: &'static str = env!("CARGO_PKG_VERSION");
 
@@ -152,7 +153,11 @@ fn compose_build_environment(build_hash: String, build_artifact: &ArtifactRepr) 
     composer.compose().unwrap();
 }
 
-fn run_dependency_build_steps(build_hash: String, build_artifact: &ArtifactRepr, dryrun: bool) {}
+fn run_dependency_build_steps(build_hash: String, build_artifact: &ArtifactRepr, dryrun: bool) -> Result<(), Box<dyn std::error::Error>> {
+    let mut builder = StackBuilder::new(build_artifact, dryrun);
+
+    builder.build()
+}
 
 fn update_artifacts() {
     let torb_path_buf = torb_path();
