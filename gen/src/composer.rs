@@ -1,6 +1,6 @@
 use crate::artifacts::{ArtifactNodeRepr, ArtifactRepr};
-use crate::utils::torb_path;
-use hcl::{Block, Body, Expression, RawExpression, Value, Object, ObjectKey};
+use crate::utils::{torb_path, buildstate_path_or_create};
+use hcl::{Block, Body, Expression, RawExpression, Object, ObjectKey};
 use memorable_wordlist;
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -9,8 +9,8 @@ use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum TorbComposerErrors {
-    #[error("Environments folder not found. Please make sure Torb is correctly initialized.")]
-    EnvironmentsNotFound,
+    #[error("IAC environment folder not found in .torb_buildstate in project.")]
+    EnvironmentNotFound,
 }
 
 fn reserved_outputs() -> HashMap<&'static str, &'static str> {
@@ -166,18 +166,11 @@ impl<'a> Composer<'a> {
 
     pub fn compose(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         println!("Composing build environment...");
-        let path = torb_path();
-        let environments_path = path.join("environments");
+        let buildstate_path = buildstate_path_or_create();
+        let environment_path = buildstate_path.join("iac_environment");
 
-        if !environments_path.exists() {
-            return Err(Box::new(TorbComposerErrors::EnvironmentsNotFound));
-        }
-
-        let new_environment_path = environments_path.join(&self.hash);
-
-        if !new_environment_path.exists() {
-            fs::create_dir(new_environment_path)
-                .expect("Failed to create new environment directory.");
+        if !environment_path.exists() {
+            return Err(Box::new(TorbComposerErrors::EnvironmentNotFound));
         }
 
         for node in self.artifact_repr.deploys.iter() {
@@ -196,7 +189,8 @@ impl<'a> Composer<'a> {
     fn copy_supporting_build_files(&self) -> Result<(), Box<dyn std::error::Error>> {
         let path = torb_path();
         let supporting_build_files_path = path.join("torb-artifacts/common");
-        let new_environment_path = torb_path().join("environments").join(&self.hash);
+        let buildstate_path = buildstate_path_or_create();
+        let new_environment_path = buildstate_path.join("iac_environment");
         let dest =
             new_environment_path.join(supporting_build_files_path.as_path().file_name().unwrap());
 
@@ -237,7 +231,8 @@ impl<'a> Composer<'a> {
 
     fn write_main_buildfile(&mut self) -> Result<std::path::PathBuf, Box<dyn std::error::Error>> {
         let builder = std::mem::take(&mut self.main_struct);
-        let environment_path = torb_path().join("environments").join(&self.hash);
+        let buildstate_path = buildstate_path_or_create();
+        let environment_path = buildstate_path.join("iac_environment");
         let main_tf_path = environment_path.join("main.tf");
 
         let built_content = builder.build();
@@ -314,12 +309,13 @@ impl<'a> Composer<'a> {
         &mut self,
         node: &ArtifactNodeRepr,
     ) -> Result<bool, Box<dyn std::error::Error>> {
-        let environment_path = torb_path().join("environments").join(&self.hash);
+        let buildstate_path = buildstate_path_or_create();
+        let environment_path = buildstate_path.join("iac_environment");
         let env_node_path = environment_path.join(&node.name);
 
         if !env_node_path.exists() {
             let error = format!(
-                "Failed to create new module directory in environment {}.",
+                "Failed to create new module directory in environment for revision {}.",
                 &self.hash
             );
             fs::create_dir(&env_node_path).expect(&error);

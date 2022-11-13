@@ -59,13 +59,6 @@ fn init() {
         fs::copy(torb_config_template, torb_config_path).expect("Unable to copy config template file from ~/.torb/torb-artifacts/config.template.yaml. Please check that Torb has been initialized properly.");
     }
 
-    let environments_path = torb_path.join("environments");
-
-    if !environments_path.is_dir() {
-        println!("Creating empty environment dir...",);
-        fs::create_dir(&environments_path).unwrap();
-    }
-
     let tf_path = torb_path.join("terraform.zip");
     let tf_bin_path = torb_path.join("terraform");
     if !tf_bin_path.is_file() {
@@ -336,7 +329,7 @@ fn main() {
                     build_hash.clone(),
                     &build_artifact,
                     dryrun_option.is_some(),
-                );
+                ).expect("Unable to build required images/artifacts for nodes.");
 
                 compose_build_environment(build_hash.clone(), &build_artifact);
             }

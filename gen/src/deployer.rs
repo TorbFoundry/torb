@@ -7,7 +7,7 @@ use indexmap::{IndexMap};
 use std::path::Path;
 use std::process::Command;
 use thiserror::Error;
-use crate::utils::{torb_path};
+use crate::utils::{torb_path, buildstate_path_or_create};
 
 #[derive(Error, Debug)]
 pub enum TorbDeployerErrors {
@@ -119,10 +119,9 @@ impl StackDeployer {
     fn init_tf(&self) -> Result<std::process::Output, Box<dyn std::error::Error>> {
         println!("Initalizing terraform...");
         let torb_path = torb_path();
-        let artifact_path = torb_path.join("torb-artifacts/");
-        println!("artifact path: {:?}", artifact_path);
+        let buildstate_path = buildstate_path_or_create();
         let mut cmd = Command::new("./terraform");
-        cmd.arg(format!("-chdir={}", artifact_path.to_str().unwrap()));
+        cmd.arg(format!("-chdir={}", buildstate_path.to_str().unwrap()));
         cmd.arg("init");
         cmd.current_dir(torb_path);
 

@@ -61,10 +61,13 @@ impl<'a> StackBuilder<'a> {
         tag: String,
         registry: String,
     ) -> Result<Vec<Output>, TorbBuilderErrors> {
-        let commands = vec![
+        let mut commands = vec![
             vec!["docker", "build", &dockerfile, "-t", &tag],
-            vec!["docker", "push", &registry, &tag],
         ];
+
+        if registry != "" {
+            commands.push(vec!["docker", "push", &registry, &tag])
+        }
 
         if self.dryrun {
             println!("{:?}", commands);
