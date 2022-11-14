@@ -21,7 +21,7 @@ use thiserror::Error;
 use ureq;
 use utils::{buildstate_path_or_create, torb_path};
 
-use crate::artifacts::load_build_file;
+use crate::artifacts::{load_build_file, get_build_file_info};
 use crate::config::TORB_CONFIG;
 use crate::vsc::{GitVersionControl, GithubVSC};
 use crate::builder::{StackBuilder};
@@ -265,6 +265,18 @@ fn main() {
                         .help("Dry run. Don't actually build the stack."),
                 ),
         )
+        .subcommand(SubCommand::with_name("deploy-stack")
+        .about("Deploy a stack from a stack definition file.")
+        .arg(
+            Arg::with_name("file")
+                .takes_value(true)
+                .required(true)
+                .index(1)
+                .help("File path of the stack definition file."),
+        ).arg(Arg::new("--dryrun")
+            .short('d')
+            .takes_value(false)
+            .help("Dry run. Don't actually deploy the stack.")))
         .subcommand(SubCommand::with_name("list-stacks").about("List all available stacks."));
 
     let cli_matches = cli.get_matches();
@@ -332,6 +344,36 @@ fn main() {
                 ).expect("Unable to build required images/artifacts for nodes.");
 
                 compose_build_environment(build_hash.clone(), &build_artifact);
+            }
+        }
+        Some("deploy-stack") => {
+            let file_path_option = cli_matches
+                .subcommand_matches("deploy-stack")
+                .unwrap()
+                .value_of("file");
+
+            let dryrun_option = cli_matches
+                .subcommand_matches("deploy-stack")
+                .unwrap()
+                .value_of("--dryrun");
+
+            if let Some(file_path) = file_path_option {
+                println!("Attempting to read and deploy stack: {}", file_path);
+                let contents = fs::read_to_string(file_path)
+                    .expect("Something went wrong reading the stack file.");
+
+                let artifact = deserialize_stack_yaml_into_artifact(&contents).expect("Unable to read stack file into internal representation.");
+                
+                let (build_hash, build_filename, _) = get_build_file_info(&artifact).expect("Unable to get build file info for stack.");
+
+                let (_, _, build_artifact) =
+                    load_build_file(build_filename).expect("Unable to load build file.");
+
+                // run_dependency_deploy_steps(
+                //     build_hash.clone(),
+                //     &build_artifact,
+                //     dryrun_option.is_some(),
+                // ).expect("Unable to deploy required images/artifacts for nodes.");
             }
         }
         Some("list-stacks") => {

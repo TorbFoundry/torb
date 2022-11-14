@@ -313,16 +313,21 @@ pub fn deserialize_stack_yaml_into_artifact(stack_yaml: &String) -> Result<Artif
     Ok(artifact)
 }
 
-pub fn write_build_file(stack_yaml: String) -> (String, String, ArtifactRepr) {
-    println!("Creating build file...");
-    let artifact = deserialize_stack_yaml_into_artifact(&stack_yaml).unwrap();
+pub fn get_build_file_info(artifact: &ArtifactRepr) -> Result<(String, String, String), Box<dyn std::error::Error>> {
     let string_rep = serde_yaml::to_string(&artifact).unwrap();
-    let current_dir = std::env::current_dir().unwrap();
-    let current_dir_state_dir = current_dir.join(".torb_buildstate");
-    let outfile_dir_path = current_dir_state_dir.join("buildfiles");
     let hash = Sha256::digest(string_rep.as_bytes());
     let hash_base64 = Base64UrlUnpadded::encode_string(&hash);
     let filename = format!("{}_{}.yaml", hash_base64, "outfile");
+
+    Ok((hash_base64, filename, string_rep))
+}
+
+pub fn write_build_file(stack_yaml: String) -> (String, String, ArtifactRepr) {
+    let artifact = deserialize_stack_yaml_into_artifact(&stack_yaml).unwrap();
+    let current_dir = std::env::current_dir().unwrap();
+    let current_dir_state_dir = current_dir.join(".torb_buildstate");
+    let outfile_dir_path = current_dir_state_dir.join("buildfiles");
+    let (hash_base64, filename, artifact_as_string) = get_build_file_info(&artifact).unwrap();
     let outfile_path = outfile_dir_path.join(&filename);
 
     if !outfile_dir_path.is_dir() {
@@ -331,7 +336,7 @@ pub fn write_build_file(stack_yaml: String) -> (String, String, ArtifactRepr) {
 
     println!("Writing buildfile to {}", outfile_path.display());
     fs::File::create(outfile_path)
-        .and_then(|mut f| f.write(&string_rep.as_bytes()))
+        .and_then(|mut f| f.write(&artifact_as_string.as_bytes()))
         .expect("Failed to create buildfile.");
 
     (hash_base64, filename, artifact)
