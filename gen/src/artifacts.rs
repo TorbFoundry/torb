@@ -22,7 +22,7 @@ pub struct InitStep {
     pub steps: Vec<String>,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct BuildStep {
     pub script_path: String,
     pub dockerfile: String,

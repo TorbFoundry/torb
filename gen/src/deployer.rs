@@ -1,8 +1,5 @@
 use crate::artifacts::{ArtifactNodeRepr, ArtifactRepr};
-use serde::{Deserialize, Serialize};
-use serde_yaml::{self};
-use std::collections::{HashMap, HashSet};
-use std::io;
+use std::collections::{HashSet};
 use indexmap::{IndexMap};
 use std::path::Path;
 use std::process::Command;
@@ -29,7 +26,7 @@ impl StackDeployer {
         }
     }
 
-    pub fn deploy_stack(
+    pub fn deploy(
         &mut self,
         artifact: &ArtifactRepr,
         dryrun: bool,
@@ -55,7 +52,7 @@ impl StackDeployer {
         dryrun: bool,
     ) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(meta) = meta_stack.as_ref() {
-            self.deploy_stack(meta, dryrun)?;
+            self.deploy(meta, dryrun)?;
         }
 
         Ok(())

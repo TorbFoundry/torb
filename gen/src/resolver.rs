@@ -5,7 +5,7 @@ use std::collections::{HashMap};
 use indexmap::{IndexMap};
 use std::{error::Error, path::PathBuf};
 use thiserror::Error;
-use crate::artifacts::{ArtifactNodeRepr};
+use crate::artifacts::{ArtifactNodeRepr, BuildStep};
 use crate::utils::{normalize_name, torb_path};
 
 const VERSION: &'static str = env!("CARGO_PKG_VERSION");
@@ -134,9 +134,9 @@ impl StackGraph {
     pub fn add_project(&mut self, node: &ArtifactNodeRepr) {
         self.projects.insert(node.fqn.clone(), node.clone());
     }
-    pub fn add_stack(&mut self, node: &ArtifactNodeRepr) {
-        self.stacks.insert(node.fqn.clone(), node.clone());
-    }
+    // pub fn add_stack(&mut self, node: &ArtifactNodeRepr) {
+    //     self.stacks.insert(node.fqn.clone(), node.clone());
+    // }
     pub fn add_all_incoming_edges_downstream(&mut self, stack_name: String, node: &ArtifactNodeRepr) {
         self.incoming_edges
             .entry(node.fqn.clone())
@@ -319,6 +319,44 @@ impl Resolver {
         Ok(node)
     }
 
+    fn reconcile_build_step(
+        &self,
+        build_step: BuildStep,
+        new_build_step: BuildStep
+    ) -> BuildStep {
+        let registry = if new_build_step.registry != "" {
+            new_build_step.registry
+        } else {
+            build_step.registry
+        };
+
+        let dockerfile = if new_build_step.dockerfile != "" {
+            new_build_step.dockerfile
+        } else {
+            build_step.dockerfile
+        };
+
+        let script_path = if new_build_step.script_path != "" {
+            new_build_step.script_path
+        } else {
+            build_step.script_path
+        };
+
+        let tag = if new_build_step.tag != "" {
+            new_build_step.tag
+        } else {
+            build_step.tag
+        };
+
+
+        BuildStep{
+            registry,
+            tag,
+            dockerfile,
+            script_path
+        }
+    }
+
     fn resolve_project(
         &self,
         stack_name: &str,
@@ -327,6 +365,7 @@ impl Resolver {
         project_name: &str,
         artifact_path: PathBuf,
         inputs: IndexMap<String, String>,
+        build_config: Option<&Value>
     ) -> Result<ArtifactNodeRepr, Box<dyn Error>> {
         let projects_path = artifact_path.join("projects");
         let project_path = projects_path.join(project_name);
@@ -337,6 +376,26 @@ impl Resolver {
             .to_str()
             .ok_or("Could not convert path to string.")?
             .to_string();
+
+        let build_step = node.build_step.or(Some(BuildStep::default())).unwrap();
+        let new_build_step: BuildStep = match build_config {
+            Some(build) => {
+                let temp = serde_yaml::from_value(build.clone())?;
+                self.reconcile_build_step(build_step, temp)
+            },
+            None => {
+                let temp = BuildStep {
+                    registry: "".to_string(),
+                    dockerfile: "".to_string(),
+                    script_path: "".to_string(),
+                    tag: "".to_string(),
+                };
+
+                self.reconcile_build_step(build_step, temp)
+            }
+        };
+
+        node.build_step = Some(new_build_step);
         node.fqn = format!("{}.{}.{}", stack_name, stack_kind_name, node_name);
         node.file_path = node_fp;
         node.validate_map_and_set_inputs(inputs);
@@ -432,6 +491,7 @@ impl Resolver {
             }
             "project" => {
                 let project_name = yaml.get("project").ok_or(err)?.as_str().expect("Unable to parse project name.");
+                let build_config = yaml.get("build");
                 self.resolve_project(
                     stack_name,
                     stack_kind_name,
@@ -439,6 +499,7 @@ impl Resolver {
                     project_name,
                     artifacts_path,
                     inputs,
+                    build_config
                 )
             }
             // TODO(Ian): Revisit nested stacks after MVP.

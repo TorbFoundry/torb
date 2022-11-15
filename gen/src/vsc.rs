@@ -4,7 +4,6 @@ use std::path::PathBuf;
 use std::process::Command;
 use thiserror::Error;
 use ureq::{AgentBuilder};
-use crate::utils::CommandPipeline;
 
 #[derive(Error, Debug)]
 pub enum TorbVSCErrors {

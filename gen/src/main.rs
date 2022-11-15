@@ -8,11 +8,7 @@ mod resolver;
 mod utils;
 mod vsc;
 
-use artifacts::{deserialize_stack_yaml_into_artifact, write_build_file, ArtifactRepr};
 use clap::{App, Arg, SubCommand};
-use composer::Composer;
-use deployer::StackDeployer;
-use initializer::StackInitializer;
 use std::fs;
 use std::fs::File;
 use std::io;
@@ -21,10 +17,13 @@ use thiserror::Error;
 use ureq;
 use utils::{buildstate_path_or_create, torb_path};
 
-use crate::artifacts::{load_build_file, get_build_file_info};
+use crate::artifacts::{load_build_file, get_build_file_info, deserialize_stack_yaml_into_artifact, write_build_file, ArtifactRepr};
+use crate::composer::Composer;
 use crate::config::TORB_CONFIG;
+use crate::initializer::StackInitializer;
 use crate::vsc::{GitVersionControl, GithubVSC};
 use crate::builder::{StackBuilder};
+use crate::deployer::{StackDeployer};
 
 const VERSION: &'static str = env!("CARGO_PKG_VERSION");
 
@@ -133,23 +132,21 @@ fn init_stack(file_path: String) {
         .expect("Failed to initialize stack.");
 }
 
-fn deploy_stack(
-    build_artifact: ArtifactRepr,
-    dryrun: bool,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let mut stack_builder = StackDeployer::new();
-    stack_builder.deploy_stack(&build_artifact, dryrun)
-}
-
 fn compose_build_environment(build_hash: String, build_artifact: &ArtifactRepr) {
     let mut composer = Composer::new(build_hash, build_artifact);
     composer.compose().unwrap();
 }
 
-fn run_dependency_build_steps(build_hash: String, build_artifact: &ArtifactRepr, dryrun: bool) -> Result<(), Box<dyn std::error::Error>> {
+fn run_dependency_build_steps(_build_hash: String, build_artifact: &ArtifactRepr, dryrun: bool) -> Result<(), Box<dyn std::error::Error>> {
     let mut builder = StackBuilder::new(build_artifact, dryrun);
 
     builder.build()
+}
+
+fn run_deploy_steps(_build_hash: String, build_artifact: &ArtifactRepr, dryrun: bool) -> Result<(), Box<dyn std::error::Error>> {
+    let mut deployer = StackDeployer::new(); 
+
+    deployer.deploy(build_artifact, dryrun)
 }
 
 fn update_artifacts() {
@@ -369,11 +366,11 @@ fn main() {
                 let (_, _, build_artifact) =
                     load_build_file(build_filename).expect("Unable to load build file.");
 
-                // run_dependency_deploy_steps(
-                //     build_hash.clone(),
-                //     &build_artifact,
-                //     dryrun_option.is_some(),
-                // ).expect("Unable to deploy required images/artifacts for nodes.");
+                run_deploy_steps(
+                    build_hash.clone(),
+                    &build_artifact,
+                    dryrun_option.is_some(),
+                ).expect("Unable to deploy required images/artifacts for nodes.");
             }
         }
         Some("list-stacks") => {
