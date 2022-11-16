@@ -24,9 +24,13 @@ pub struct InitStep {
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct BuildStep {
+    #[serde(default = "String::new")]
     pub script_path: String,
+    #[serde(default = "String::new")]
     pub dockerfile: String,
+    #[serde(default = "String::new")]
     pub tag: String,
+    #[serde(default = "String::new")]
     pub registry: String,
 }
 
