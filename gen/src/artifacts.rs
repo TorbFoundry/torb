@@ -48,9 +48,9 @@ pub struct ArtifactNodeRepr {
     pub build_step: Option<BuildStep>,
     #[serde(alias = "deploy")]
     pub deploy_steps: IndexMap<String, Option<IndexMap<String, String>>>,
-    #[serde(default = "IndexMap::new", rename(serialize = "inputs"))]
+    #[serde(default = "IndexMap::new")]
     pub mapped_inputs: IndexMap<String, (String, String)>,
-    #[serde(alias = "inputs", skip_serializing, skip_deserializing, default = "IndexMap::new")]
+    #[serde(alias = "inputs", default = "IndexMap::new")]
     pub input_spec: IndexMap<String, String>,
     #[serde(default = "Vec::new")]
     pub outputs: Vec<String>,

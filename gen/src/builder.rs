@@ -1,5 +1,5 @@
 use crate::artifacts::{ArtifactNodeRepr, ArtifactRepr};
-use crate::utils::{run_command_in_user_shell, CommandPipeline};
+use crate::utils::{run_command_in_user_shell, CommandConfig, CommandPipeline};
 use std::collections::HashSet;
 use std::fs;
 use std::process::{Command, Output};
@@ -61,12 +61,20 @@ impl<'a> StackBuilder<'a> {
         tag: String,
         registry: String,
     ) -> Result<Vec<Output>, TorbBuilderErrors> {
-        let mut commands = vec![
-            vec!["docker", "build", &dockerfile, "-t", &tag],
-        ];
+        let current_dir = std::env::current_dir().unwrap();
+
+        let mut commands = vec![CommandConfig::new(
+            "docker",
+            vec!["build", ".", "-f", &dockerfile, "-t", &tag],
+            Some(&current_dir.to_str().unwrap()),
+        )];
 
         if registry != "" {
-            commands.push(vec!["docker", "push", &registry, &tag])
+            commands.push(CommandConfig::new(
+                "docker",
+                vec!["push", &registry, &tag],
+                Some(&current_dir.to_str().unwrap()),
+            ));
         }
 
         if self.dryrun {

@@ -114,7 +114,8 @@ impl<'a> Composer<'a> {
             "{}.{}.{}",
             stack_name, &torb_input_address.node_type, &torb_input_address.node_name
         );
-
+        println!("output_node_fqn: {}", output_node_fqn);
+        println!("{:?}", self.artifact_repr.nodes);
         self
             .artifact_repr
             .nodes
@@ -170,7 +171,7 @@ impl<'a> Composer<'a> {
         let environment_path = buildstate_path.join("iac_environment");
 
         if !environment_path.exists() {
-            return Err(Box::new(TorbComposerErrors::EnvironmentNotFound));
+            std::fs::create_dir(environment_path)?;
         }
 
         for node in self.artifact_repr.deploys.iter() {
