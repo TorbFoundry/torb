@@ -50,7 +50,7 @@ pub struct ArtifactNodeRepr {
     pub deploy_steps: IndexMap<String, Option<IndexMap<String, String>>>,
     #[serde(default = "IndexMap::new", rename(serialize = "inputs"))]
     pub mapped_inputs: IndexMap<String, (String, String)>,
-    #[serde(alias = "inputs", skip_serializing, default = "IndexMap::new")]
+    #[serde(alias = "inputs", skip_serializing, skip_deserializing, default = "IndexMap::new")]
     pub input_spec: IndexMap<String, String>,
     #[serde(default = "Vec::new")]
     pub outputs: Vec<String>,
@@ -338,10 +338,15 @@ pub fn write_build_file(stack_yaml: String) -> (String, String, ArtifactRepr) {
         fs::create_dir(&outfile_dir_path).expect("Failed to create buildfile directory.");
     };
 
-    println!("Writing buildfile to {}", outfile_path.display());
-    fs::File::create(outfile_path)
-        .and_then(|mut f| f.write(&artifact_as_string.as_bytes()))
-        .expect("Failed to create buildfile.");
+    if outfile_path.exists() {
+        println!("Build file already exists with same hash, skipping write.");
+    } else {
+        println!("Writing buildfile to {}", outfile_path.display());
+        fs::File::create(outfile_path)
+            .and_then(|mut f| f.write(&artifact_as_string.as_bytes()))
+            .expect("Failed to create buildfile.");
+    }
+
 
     (hash_base64, filename, artifact)
 }
