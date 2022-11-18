@@ -9,8 +9,6 @@ use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum TorbComposerErrors {
-    #[error("IAC environment folder not found in .torb_buildstate in project.")]
-    EnvironmentNotFound,
 }
 
 fn reserved_outputs() -> HashMap<&'static str, &'static str> {

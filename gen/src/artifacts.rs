@@ -2,7 +2,6 @@ use crate::resolver::{DependencyNodeDependencies, StackGraph, resolve_stack};
 use crate::utils::{checksum, buildstate_path_or_create};
 use base64ct::{Base64UrlUnpadded, Encoding};
 use indexmap::IndexMap;
-use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use serde_yaml::{self};
 use sha2::{Digest, Sha256};
@@ -175,8 +174,7 @@ pub struct ArtifactRepr {
     pub ingress: bool,
     pub meta: Box<Option<ArtifactRepr>>,
     pub deploys: Vec<ArtifactNodeRepr>,
-    #[serde(skip)]
-    pub nodes: HashMap<String, ArtifactNodeRepr>
+    pub nodes: IndexMap<String, ArtifactNodeRepr>
 }
 
 impl ArtifactRepr {
@@ -198,7 +196,7 @@ impl ArtifactRepr {
             ingress,
             meta,
             deploys: Vec::new(),
-            nodes: HashMap::new()
+            nodes: IndexMap::new()
         }
     }
 }
@@ -238,7 +236,7 @@ fn walk_graph(graph: &StackGraph) -> Result<ArtifactRepr, Box<dyn std::error::Er
         meta,
     );
 
-    let mut node_map: HashMap<String, ArtifactNodeRepr> = HashMap::new();
+    let mut node_map: IndexMap<String, ArtifactNodeRepr> = IndexMap::new();
 
     for node in start_nodes {
         let artifact_node_repr = walk_nodes(node, graph, &mut node_map);
@@ -261,7 +259,7 @@ pub fn stack_into_artifact(meta: &Box<Option<ArtifactNodeRepr>>) -> Result<Box<O
     }
 }
 
-fn walk_nodes(node: &ArtifactNodeRepr, graph: &StackGraph, node_map: &mut HashMap<String, ArtifactNodeRepr>) -> ArtifactNodeRepr {
+fn walk_nodes(node: &ArtifactNodeRepr, graph: &StackGraph, node_map: &mut IndexMap<String, ArtifactNodeRepr>) -> ArtifactNodeRepr {
     let mut new_node = node.clone();
     new_node.dependency_names.projects.as_ref().map_or((), |projects| {
         for project in projects {

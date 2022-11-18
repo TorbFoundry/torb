@@ -451,18 +451,18 @@ impl Resolver {
         }
     }
 
-    fn deserialize_outputs(params: Option<&serde_yaml::Value>) -> Result<Vec<String>, Box<dyn Error>> {
-        match params {
-            Some(params) => {
-                let deserialized_params: Vec<String> = serde_yaml::from_value(params.clone())?;
+    // fn deserialize_outputs(params: Option<&serde_yaml::Value>) -> Result<Vec<String>, Box<dyn Error>> {
+    //     match params {
+    //         Some(params) => {
+    //             let deserialized_params: Vec<String> = serde_yaml::from_value(params.clone())?;
 
-                Ok(deserialized_params)
-            },
-            None => {
-                Ok(Vec::new())
-            }
-        }
-    }
+    //             Ok(deserialized_params)
+    //         },
+    //         None => {
+    //             Ok(Vec::new())
+    //         }
+    //     }
+    // }
 
     fn resolve_node(
         &self,

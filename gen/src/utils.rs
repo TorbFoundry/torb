@@ -71,6 +71,9 @@ pub fn checksum(data: String, original_hash: String) -> bool {
     let hash = Sha256::digest(data.as_bytes());
     let hash_base64 = Base64UrlUnpadded::encode_string(&hash);
 
+    println!("hash: {}", hash_base64);
+    println!("original_hash: {}", original_hash);
+
     hash_base64 == original_hash
 }
 

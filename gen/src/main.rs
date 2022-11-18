@@ -362,7 +362,7 @@ fn main() {
                 let artifact = deserialize_stack_yaml_into_artifact(&contents).expect("Unable to read stack file into internal representation.");
                 
                 let (build_hash, build_filename, _) = get_build_file_info(&artifact).expect("Unable to get build file info for stack.");
-
+                println!("build_filename: {}", build_filename);
                 let (_, _, build_artifact) =
                     load_build_file(build_filename).expect("Unable to load build file.");
 
