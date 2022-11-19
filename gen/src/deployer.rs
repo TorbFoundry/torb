@@ -40,9 +40,8 @@ impl StackDeployer {
             self.deploy_meta(&artifact.meta, dryrun)?;
         }
 
-        for node in artifact.deploys.iter() {
-            self.walk_deploy_path(node, dryrun)?
-        }
+        self.deploy_tf(dryrun)?;
+
         Ok(())
     }
 
@@ -56,61 +55,6 @@ impl StackDeployer {
         }
 
         Ok(())
-    }
-
-    fn walk_deploy_path(
-        &mut self,
-        node: &ArtifactNodeRepr,
-        dryrun: bool,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        // We want to walk to the end of the dependencies before we deploy.
-        for child in node.dependencies.iter() {
-            self.walk_deploy_path(child, dryrun)?
-        }
-
-        if !self.built.contains(&node.fqn) {
-            self.deploy_node(&node, dryrun).and_then(|_out| {
-                if self.built.insert(node.fqn.clone()) {
-                    Ok(())
-                } else {
-                    Err(Box::new(std::io::Error::new(
-                        std::io::ErrorKind::Other,
-                        "Step already built.",
-                    )))
-                }
-            })?;
-        }
-
-        Ok(())
-    }
-
-    fn deploy_node(
-        &self,
-        node: &ArtifactNodeRepr,
-        dryrun: bool,
-    ) -> Result<std::process::Output, Box<dyn std::error::Error>> {
-        let tf_path = Path::new(&node.file_path)
-            .parent()
-            .unwrap()
-            .join("terraform/");
-        println!("Deploying {}", node.fqn);
-        println!("deploy steps: {:?}", node.deploy_steps);
-        println!("tf path: {:?}", &tf_path);
-        let helm_config = node
-            .deploy_steps
-            .get(&"helm".to_string())
-            .expect("No helm deploy config key found.");
-
-        match helm_config {
-            Some(conf) => self.deploy_tf(&tf_path, conf, dryrun),
-            None => {
-                println!(
-                    "No helm configuration found for {}... trying to deploy...",
-                    node.fqn
-                );
-                self.deploy_tf(&tf_path, &IndexMap::<String, String>::new(), dryrun)
-            }
-        }
     }
 
     fn init_tf(&self) -> Result<std::process::Output, Box<dyn std::error::Error>> {
@@ -127,22 +71,19 @@ impl StackDeployer {
 
     fn deploy_tf(
         &self,
-        path: &std::path::PathBuf,
-        config: &IndexMap<String, String>,
         dryrun: bool,
     ) -> Result<std::process::Output, Box<dyn std::error::Error>> {
         let torb_path = torb_path();
-        let mut cmd = Command::new("./terraform");
-        cmd.arg(format!("-chdir={}", path.to_str().unwrap()));
+        let mut cmd = Command::new("terraform");
+        let buildstate_path = buildstate_path_or_create();
+        let iac_env_path = buildstate_path.join("iac_environment");
+        cmd.arg(format!("-chdir={}", iac_env_path.to_str().unwrap()));
         cmd.arg("plan")
             .arg("-out=tfplan")
             .arg("-no-color")
             .arg("-detailed-exitcode");
 
-        for (key, value) in config.iter() {
-            cmd.arg(format!("-var={}={}", key, value));
-        }
-        cmd.current_dir(torb_path);
+        cmd.current_dir(&torb_path);
         let out = cmd.output()?;
 
         if !out.status.success() {
@@ -160,7 +101,8 @@ impl StackDeployer {
         } else {
             let mut cmd = Command::new("./terraform");
             cmd.arg("apply").arg("tfplan");
-            cmd.current_dir(path);
+            cmd.arg(format!("-chdir={}", iac_env_path.to_str().unwrap()));
+            cmd.current_dir(&torb_path);
             Ok(cmd.output()?)
         }
     }
