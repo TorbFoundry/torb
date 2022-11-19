@@ -267,6 +267,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "data-encoding"
+version = "2.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3ee2393c4a91429dffb4bedf19f4d6abf27d8a732c8ce4980305d782e5426d57"
+
+[[package]]
 name = "digest"
 version = "0.10.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -939,6 +945,7 @@ dependencies = [
  "base64ct",
  "chrono",
  "clap",
+ "data-encoding",
  "dirs",
  "hcl-rs",
  "indexmap",

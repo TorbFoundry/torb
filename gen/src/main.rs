@@ -63,8 +63,8 @@ fn init() {
     if !tf_bin_path.is_file() {
         println!("Downloading terraform...");
         let tf_url = match std::env::consts::OS {
-            "linux" => "https://releases.hashicorp.com/terraform/0.12.24/terraform_0.12.24_linux_amd64.zip",
-            "macos" => "https://releases.hashicorp.com/terraform/0.12.24/terraform_0.12.24_darwin_amd64.zip",
+            "linux" => "https://releases.hashicorp.com/terraform/1.2.5/terraform_1.2.5_linux_amd64.zip",
+            "macos" => "https://releases.hashicorp.com/terraform/1.2.5/terraform_1.2.5_darwin_amd64.zip",
             _ => panic!("Unsupported OS"),
         };
         let resp = ureq::get(

@@ -77,12 +77,13 @@ impl StackDeployer {
         dryrun: bool,
     ) -> Result<std::process::Output, Box<dyn std::error::Error>> {
         let torb_path = torb_path();
-        let mut cmd = Command::new("./terraform");
         let buildstate_path = buildstate_path_or_create();
         let iac_env_path = buildstate_path.join("iac_environment");
-        cmd.arg(format!("-chdir={}", iac_env_path.to_str().unwrap()));
-        cmd.arg("plan")
-            .arg("-out=tfplan")
+
+        let mut cmd = Command::new("./terraform");
+        cmd.arg(format!("-chdir={}", iac_env_path.to_str().unwrap()))
+            .arg("plan")
+            .arg("-out=./tfplan")
             .arg("-no-color")
             .arg("-detailed-exitcode");
 
