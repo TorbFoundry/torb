@@ -1,6 +1,5 @@
 use std::process::{Command, Output};
-
-use base64ct::{Base64UrlUnpadded, Encoding};
+use data_encoding::BASE32;
 use sha2::{Digest, Sha256};
 use std::error::Error;
 use thiserror::Error;
@@ -69,12 +68,12 @@ pub fn run_command_in_user_shell(
 
 pub fn checksum(data: String, original_hash: String) -> bool {
     let hash = Sha256::digest(data.as_bytes());
-    let hash_base64 = Base64UrlUnpadded::encode_string(&hash);
+    let hash_base32 = BASE32.encode(&hash);
 
-    println!("hash: {}", hash_base64);
+    println!("hash: {}", hash_base32);
     println!("original_hash: {}", original_hash);
 
-    hash_base64 == original_hash
+    hash_base32 == original_hash
 }
 
 pub struct CommandPipeline {

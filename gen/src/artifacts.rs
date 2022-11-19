@@ -1,6 +1,6 @@
 use crate::resolver::{DependencyNodeDependencies, StackGraph, resolve_stack};
 use crate::utils::{checksum, buildstate_path_or_create};
-use base64ct::{Base64UrlUnpadded, Encoding};
+use data_encoding::BASE32;
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use serde_yaml::{self};
@@ -318,10 +318,10 @@ pub fn deserialize_stack_yaml_into_artifact(stack_yaml: &String) -> Result<Artif
 pub fn get_build_file_info(artifact: &ArtifactRepr) -> Result<(String, String, String), Box<dyn std::error::Error>> {
     let string_rep = serde_yaml::to_string(&artifact).unwrap();
     let hash = Sha256::digest(string_rep.as_bytes());
-    let hash_base64 = Base64UrlUnpadded::encode_string(&hash);
-    let filename = format!("{}_{}.yaml", hash_base64, "outfile");
+    let hash_base32 = BASE32.encode(&hash);
+    let filename = format!("{}_{}.yaml", hash_base32, "outfile");
 
-    Ok((hash_base64, filename, string_rep))
+    Ok((hash_base32, filename, string_rep))
 }
 
 pub fn write_build_file(stack_yaml: String) -> (String, String, ArtifactRepr) {
@@ -329,7 +329,7 @@ pub fn write_build_file(stack_yaml: String) -> (String, String, ArtifactRepr) {
     let current_dir = std::env::current_dir().unwrap();
     let current_dir_state_dir = current_dir.join(".torb_buildstate");
     let outfile_dir_path = current_dir_state_dir.join("buildfiles");
-    let (hash_base64, filename, artifact_as_string) = get_build_file_info(&artifact).unwrap();
+    let (hash_base32, filename, artifact_as_string) = get_build_file_info(&artifact).unwrap();
     let outfile_path = outfile_dir_path.join(&filename);
 
     if !outfile_dir_path.is_dir() {
@@ -346,5 +346,5 @@ pub fn write_build_file(stack_yaml: String) -> (String, String, ArtifactRepr) {
     }
 
 
-    (hash_base64, filename, artifact)
+    (hash_base32, filename, artifact)
 }

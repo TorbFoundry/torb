@@ -37,6 +37,7 @@ impl StackDeployer {
         println!("{}", std::str::from_utf8(&out.stdout).unwrap());
 
         if artifact.meta.as_ref().is_some() {
+            println!("Deploying meta...");
             self.deploy_meta(&artifact.meta, dryrun)?;
         }
 
@@ -61,11 +62,13 @@ impl StackDeployer {
         println!("Initalizing terraform...");
         let torb_path = torb_path();
         let buildstate_path = buildstate_path_or_create();
+        let iac_env_path = buildstate_path.join("iac_environment");
         let mut cmd = Command::new("./terraform");
-        cmd.arg(format!("-chdir={}", buildstate_path.to_str().unwrap()));
+        cmd.arg(format!("-chdir={}", iac_env_path.to_str().unwrap()));
         cmd.arg("init");
         cmd.current_dir(torb_path);
 
+        println!("Running command: {:?}", cmd);
         Ok(cmd.output()?)
     }
 
@@ -74,7 +77,7 @@ impl StackDeployer {
         dryrun: bool,
     ) -> Result<std::process::Output, Box<dyn std::error::Error>> {
         let torb_path = torb_path();
-        let mut cmd = Command::new("terraform");
+        let mut cmd = Command::new("./terraform");
         let buildstate_path = buildstate_path_or_create();
         let iac_env_path = buildstate_path.join("iac_environment");
         cmd.arg(format!("-chdir={}", iac_env_path.to_str().unwrap()));
@@ -84,7 +87,10 @@ impl StackDeployer {
             .arg("-detailed-exitcode");
 
         cmd.current_dir(&torb_path);
+
+        println!("Running command: {:?}", cmd);
         let out = cmd.output()?;
+
 
         if !out.status.success() {
             let err_resp = std::str::from_utf8(&out.stderr).unwrap();
