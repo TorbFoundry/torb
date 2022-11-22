@@ -135,7 +135,7 @@ impl<'a> Composer<'a> {
                 let formatted_name = kebab_to_snake_case(&self.release_name);
                 let module = format!("{}_{}", formatted_name, &output_node.name);
 
-                Expression::Raw(RawExpression::new(format!("data.{}.status.0.port", module)))
+                Expression::Raw(RawExpression::new(format!("data.kubernetes_resource.{}.object.spec.0.port.0.port", module)))
             }
             _ => {
                 panic!("Unable to map reserved value.")
@@ -160,7 +160,7 @@ impl<'a> Composer<'a> {
         let formatted_name = kebab_to_snake_case(&self.release_name);
         let block_name = format!("{}_{}", formatted_name, &output_node.name);
 
-        format!("data.{}.status.0.values.{}", block_name, kube_value)
+        format!("data.kubernetes_resource.{}.object.status.0.values.{}", block_name, kube_value)
     }
 
     pub fn compose(&mut self) -> Result<(), Box<dyn std::error::Error>> {
@@ -291,14 +291,26 @@ impl<'a> Composer<'a> {
         node: &ArtifactNodeRepr,
     ) -> Result<Block, Box<dyn std::error::Error>> {
         let snake_case_release_name = self.release_name.clone().replace("-", "_");
+        let namespace = node
+            .fqn
+            .split(".")
+            .next()
+            .unwrap()
+            .to_string()
+            .replace("_", "-");
+        let name = node.fqn.clone().replace(".", "_");
         let metadata_block = Block::builder("metadata")
             .add_attribute(("name", format!("{}-{}", &self.release_name, &node.name)))
+            .add_attribute(("namespace", namespace))
             .build();
 
         let data_block = Block::builder("data")
-            .add_label("kubernetes_service")
+            .add_label("kubernetes_resource")
             .add_label(format!("{}_{}", &snake_case_release_name, &node.name))
+            .add_attribute(("kind", "Service"))
+            .add_attribute(("api_version", "v1"))
             .add_block(metadata_block)
+            .add_attribute(("depends_on", Expression::from(vec![RawExpression::from(format!("module.{}", name))])))
             .build();
 
         Ok(data_block)

@@ -35,13 +35,16 @@ impl StackDeployer {
 
         let out = self.init_tf().expect("Failed to initialize terraform.");
         println!("{}", std::str::from_utf8(&out.stdout).unwrap());
+        println!("{}", std::str::from_utf8(&out.stderr).unwrap());
 
-        if artifact.meta.as_ref().is_some() {
-            println!("Deploying meta...");
-            self.deploy_meta(&artifact.meta, dryrun)?;
-        }
+        // if artifact.meta.as_ref().is_some() {
+        //     println!("Deploying meta...");
+        //     self.deploy_meta(&artifact.meta, dryrun)?;
+        // }
 
-        self.deploy_tf(dryrun)?;
+        let out = self.deploy_tf(dryrun).expect("Failed to plan and deploy terraform.");
+        println!("{}", std::str::from_utf8(&out.stdout).unwrap());
+        println!("{}", std::str::from_utf8(&out.stderr).unwrap());
 
         Ok(())
     }
@@ -83,9 +86,8 @@ impl StackDeployer {
         let mut cmd = Command::new("./terraform");
         cmd.arg(format!("-chdir={}", iac_env_path.to_str().unwrap()))
             .arg("plan")
-            .arg("-out=./tfplan")
-            .arg("-no-color")
-            .arg("-detailed-exitcode");
+            .arg("-out=./tfplan");
+            // .arg("-detailed-exitcode");
 
         cmd.current_dir(&torb_path);
 
@@ -95,6 +97,9 @@ impl StackDeployer {
 
         if !out.status.success() {
             let err_resp = std::str::from_utf8(&out.stderr).unwrap();
+            println!("{}", std::str::from_utf8(&out.stderr).unwrap());
+            println!("{}", std::str::from_utf8(&out.stderr).unwrap());
+            println!("{}", std::str::from_utf8(&out.stderr).unwrap());
             let err = TorbDeployerErrors::FailedToPlan {
                 command: cmd,
                 response: err_resp.to_string(),
@@ -107,9 +112,10 @@ impl StackDeployer {
             Ok(out)
         } else {
             let mut cmd = Command::new("./terraform");
-            cmd.arg("apply").arg("tfplan");
-            cmd.arg(format!("-chdir={}", iac_env_path.to_str().unwrap()));
-            cmd.current_dir(&torb_path);
+            cmd.arg(format!("-chdir={}", iac_env_path.to_str().unwrap()))
+            .arg("apply")
+            .arg("./tfplan")
+            .current_dir(&torb_path);
             Ok(cmd.output()?)
         }
     }
