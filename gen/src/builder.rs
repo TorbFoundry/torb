@@ -43,7 +43,7 @@ impl<'a> StackBuilder<'a> {
     fn build_node(&self, node: &ArtifactNodeRepr) -> Result<(), TorbBuilderErrors> {
         if let Some(step) = node.build_step.clone() {
             if step.dockerfile != "" {
-                self.build_docker(step.dockerfile, step.tag, step.registry)
+                self.build_docker(&node.name, step.dockerfile, step.tag, step.registry)
                     .and_then(|_| Ok(()))
             } else if step.script_path != "" {
                 self.build_script(step.script_path).and_then(|_| Ok(()))
@@ -57,22 +57,30 @@ impl<'a> StackBuilder<'a> {
 
     fn build_docker(
         &self,
+        name: &str,
         dockerfile: String,
         tag: String,
         registry: String,
     ) -> Result<Vec<Output>, TorbBuilderErrors> {
         let current_dir = std::env::current_dir().unwrap();
 
+
+        let label = if registry != "" {
+            format!("{}:{}", registry, tag)
+        } else {
+            format!("{}:{}", name, tag)
+        };
+
         let mut commands = vec![CommandConfig::new(
             "docker",
-            vec!["build", ".", "-f", &dockerfile, "-t", &tag],
+            vec!["build", "-t", &label, ".", "-f", &dockerfile],
             Some(&current_dir.to_str().unwrap()),
         )];
 
         if registry != "" {
             commands.push(CommandConfig::new(
                 "docker",
-                vec!["push", &registry, &tag],
+                vec!["push", &label],
                 Some(&current_dir.to_str().unwrap()),
             ));
         }

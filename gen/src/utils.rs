@@ -140,8 +140,10 @@ impl CommandPipeline {
         let output = command.output()?;
 
         if output.status.success() {
+            println!("Command success: {:?}", output.stdout.clone());
             Ok(output)
         } else {
+            println!("Command failed: {:?}", output.stderr.clone());
             Err(Box::new(TorbUtilityErrors::UnableToRunCommand {
                 command: format!("{:?}", command),
                 reason: String::from_utf8(output.stderr).unwrap(),

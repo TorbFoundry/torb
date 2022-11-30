@@ -14,7 +14,6 @@ pub enum TorbComposerErrors {
 fn reserved_outputs() -> HashMap<&'static str, &'static str> {
     let reserved = vec![
         ("host", ""),
-        ("port", ""),
     ];
 
     let mut reserved_hash = HashMap::new();
@@ -131,12 +130,6 @@ impl<'a> Composer<'a> {
 
                 Expression::String(format!("{}.{}.svc.cluster.local", name, namespace))
             },
-            "port" => {
-                let formatted_name = kebab_to_snake_case(&self.release_name);
-                let module = format!("{}_{}", formatted_name, &output_node.name);
-
-                Expression::Raw(RawExpression::new(format!("data.kubernetes_resource.{}.object.spec.0.port.0.port", module)))
-            }
             _ => {
                 panic!("Unable to map reserved value.")
             }
@@ -160,8 +153,9 @@ impl<'a> Composer<'a> {
         let formatted_name = kebab_to_snake_case(&self.release_name);
         let block_name = format!("{}_{}", formatted_name, &output_node.name);
 
-        format!("data.kubernetes_resource.{}.object.status.0.values.{}", block_name, kube_value)
+        format!("jsondecode(data.torb_helm_release.{}.values)[\"{}\"]", block_name, kube_value)
     }
+
 
     pub fn compose(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         println!("Composing build environment...");
@@ -171,6 +165,8 @@ impl<'a> Composer<'a> {
         if !environment_path.exists() {
             std::fs::create_dir(environment_path)?;
         }
+
+        self.add_required_providers_to_main_struct();
 
         for node in self.artifact_repr.deploys.iter() {
             self.walk_artifact(node)?;
@@ -271,7 +267,7 @@ impl<'a> Composer<'a> {
         println!("Build file copying done.");
 
         if !self.fqn_seen.contains(&node.fqn) {
-            self.add_to_main_struct(node).and_then(|_out| {
+            self.add_stack_node_to_main_struct(node).and_then(|_out| {
                 if self.fqn_seen.insert(node.fqn.clone()) {
                     Ok(())
                 } else {
@@ -299,17 +295,12 @@ impl<'a> Composer<'a> {
             .to_string()
             .replace("_", "-");
         let name = node.fqn.clone().replace(".", "_");
-        let metadata_block = Block::builder("metadata")
-            .add_attribute(("name", format!("{}-{}", &self.release_name, &node.name)))
-            .add_attribute(("namespace", namespace))
-            .build();
 
         let data_block = Block::builder("data")
-            .add_label("kubernetes_resource")
+            .add_label("torb_helm_release")
             .add_label(format!("{}_{}", &snake_case_release_name, &node.name))
-            .add_attribute(("kind", "Service"))
-            .add_attribute(("api_version", "v1"))
-            .add_block(metadata_block)
+            .add_attribute(("release_name", format!("{}-{}", self.release_name.clone(), node.name)))
+            .add_attribute(("namespace", namespace))
             .add_attribute(("depends_on", Expression::from(vec![RawExpression::from(format!("module.{}", name))])))
             .build();
 
@@ -322,7 +313,7 @@ impl<'a> Composer<'a> {
     ) -> Result<bool, Box<dyn std::error::Error>> {
         let buildstate_path = buildstate_path_or_create();
         let environment_path = buildstate_path.join("iac_environment");
-        let env_node_path = environment_path.join(&node.name);
+        let env_node_path = environment_path.join(format!("{}_module", &node.name));
 
         if !env_node_path.exists() {
             let error = format!(
@@ -384,11 +375,34 @@ impl<'a> Composer<'a> {
 
     }
 
-    fn add_to_main_struct(
+    fn add_required_providers_to_main_struct(&mut self) {
+        let required_providers = Block::builder("terraform")
+            .add_block(Block::builder("required_providers")
+                .add_attribute(("torb", Expression::from_iter(
+                    vec![
+                        ("source", "TorbFoundry/torb"),
+                        ("version", "0.1.1")
+                    ]
+                )))
+                .build()).build();
+
+        let torb_provider = Block::builder("provider")
+            .add_label("torb")
+            .build();
+
+        let mut builder = std::mem::take(&mut self.main_struct);
+
+        builder = builder.add_block(required_providers);
+        builder = builder.add_block(torb_provider);
+
+        self.main_struct = builder;
+    }
+
+    fn add_stack_node_to_main_struct(
         &mut self,
         node: &ArtifactNodeRepr,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let source = format!("./{}", node.name);
+        let source = format!("./{}_module", node.name);
         let name = node.fqn.clone().replace(".", "_");
         let namespace = node
             .fqn
@@ -398,19 +412,54 @@ impl<'a> Composer<'a> {
             .to_string()
             .replace("_", "-");
 
+        let mut values = vec![];
         let mut attributes = vec![
             ("source", source),
-            ("release_name", self.release_name.clone()),
+            ("release_name", format!("{}-{}", self.release_name.clone(), node.name)),
+            ("namespace", namespace),
+        ];
+
+        if node.build_step.is_some() {
+            let build_step = node.build_step.clone().unwrap();
+            let mut map: HashMap<String, HashMap<String, String>> = HashMap::new();
+            let mut image_key_map: HashMap<String, String> = HashMap::new();
+
+            if build_step.tag != "" {
+                image_key_map.insert("tag".to_string(), build_step.tag);
+            } else {
+                image_key_map.insert("tag".to_string(), "latest".to_string());
+            }
+            
+            if build_step.registry != "" {
+                image_key_map.insert("repository".to_string(), build_step.registry);
+            } else {
+                image_key_map.insert("repository".to_string(), node.name.clone());
+            }
+
+            map.insert("image".to_string(), image_key_map);
+
+            values.push(serde_yaml::to_string(&map)?)
+        }
+
+        if node.deploy_steps["helm"].clone().unwrap()["repository"].clone() != "" {
+            attributes.push((
+                "repository",
+                node.deploy_steps["helm"].clone().unwrap()["repository"].clone(),
+            ));
+            attributes.push(
             (
                 "chart_name",
                 node.deploy_steps["helm"].clone().unwrap()["chart"].clone(),
-            ),
+            ));
+        } else {
+            // If repository is not specified, we assume that the chart is local.
+            let local_path = torb_path().join(node.deploy_steps["helm"].clone().unwrap()["chart"].clone());
+            attributes.push(
             (
-                "repository",
-                node.deploy_steps["helm"].clone().unwrap()["repository"].clone(),
-            ),
-            ("namespace", namespace),
-        ];
+                "chart_name",
+                local_path.to_str().unwrap().to_string(),
+            ));
+        }
 
         let module_version = node.deploy_steps["helm"]
             .clone()
@@ -433,7 +482,7 @@ impl<'a> Composer<'a> {
             Block::builder("module")
                 .add_label(&name)
                 .add_attributes(attributes)
-                .add_attribute(("values", vec![""]))
+                .add_attribute(("values", values))
                 .add_attribute(("inputs", inputs))
                 .build(),
         );
