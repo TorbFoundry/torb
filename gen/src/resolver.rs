@@ -1,12 +1,12 @@
-use serde::{Deserialize, Serialize};
-use serde_yaml::{self, Value};
-use std::process::Command;
-use std::collections::{HashMap};
-use indexmap::{IndexMap};
-use std::{error::Error, path::PathBuf};
-use thiserror::Error;
 use crate::artifacts::{ArtifactNodeRepr, BuildStep};
 use crate::utils::{normalize_name, torb_path};
+use indexmap::IndexMap;
+use serde::{Deserialize, Serialize};
+use serde_yaml::{self, Value};
+use std::collections::HashMap;
+use std::process::Command;
+use std::{error::Error, path::PathBuf};
+use thiserror::Error;
 
 const VERSION: &'static str = env!("CARGO_PKG_VERSION");
 pub fn resolve_stack(stack_yaml: &String) -> Result<StackGraph, Box<dyn std::error::Error>> {
@@ -82,8 +82,7 @@ pub struct DependencyNodeDependencies {
     pub stacks: Option<Vec<String>>,
 }
 
-impl DependencyNodeDependencies {
-}
+impl DependencyNodeDependencies {}
 
 #[derive(Clone, Debug)]
 pub struct StackGraph {
@@ -137,60 +136,72 @@ impl StackGraph {
     // pub fn add_stack(&mut self, node: &ArtifactNodeRepr) {
     //     self.stacks.insert(node.fqn.clone(), node.clone());
     // }
-    pub fn add_all_incoming_edges_downstream(&mut self, stack_name: String, node: &ArtifactNodeRepr) {
+    pub fn add_all_incoming_edges_downstream(
+        &mut self,
+        stack_name: String,
+        node: &ArtifactNodeRepr,
+    ) {
         self.incoming_edges
             .entry(node.fqn.clone())
             .or_insert(Vec::<String>::new());
 
-        node.dependency_names.projects.as_ref().map_or((), |projects| {
-            projects.iter().for_each(|project| {
-                let p_fqn = format!("{}.{}.{}", stack_name, "project".to_string(), project);
-                match self.incoming_edges.get_mut(p_fqn.as_str()) {
-                    Some(edges) => {
-                        edges.push(node.fqn.clone());
+        node.dependency_names
+            .projects
+            .as_ref()
+            .map_or((), |projects| {
+                projects.iter().for_each(|project| {
+                    let p_fqn = format!("{}.{}.{}", stack_name, "project".to_string(), project);
+                    match self.incoming_edges.get_mut(p_fqn.as_str()) {
+                        Some(edges) => {
+                            edges.push(node.fqn.clone());
+                        }
+                        None => {
+                            let mut edges = Vec::new();
+                            edges.push(node.fqn.clone());
+                            self.incoming_edges.insert(p_fqn.clone(), edges);
+                        }
                     }
-                    None => {
-                        let mut edges = Vec::new();
-                        edges.push(node.fqn.clone());
-                        self.incoming_edges.insert(p_fqn.clone(), edges);
-                    }
-                }
+                });
             });
-        });
 
-        node.dependency_names.services.as_ref().map_or((), |projects| {
-            projects.iter().for_each(|project| {
-                let s_fqn = format!("{}.{}.{}", stack_name, "service".to_string(), project);
-                match self.incoming_edges.get_mut(project) {
-                    Some(edges) => {
-                        edges.push(node.fqn.clone());
+        node.dependency_names
+            .services
+            .as_ref()
+            .map_or((), |projects| {
+                projects.iter().for_each(|project| {
+                    let s_fqn = format!("{}.{}.{}", stack_name, "service".to_string(), project);
+                    match self.incoming_edges.get_mut(project) {
+                        Some(edges) => {
+                            edges.push(node.fqn.clone());
+                        }
+                        None => {
+                            let mut edges = Vec::new();
+                            edges.push(node.fqn.clone());
+                            self.incoming_edges.insert(s_fqn.clone(), edges);
+                        }
                     }
-                    None => {
-                        let mut edges = Vec::new();
-                        edges.push(node.fqn.clone());
-                        self.incoming_edges.insert(s_fqn.clone(), edges);
-                    }
-                }
+                });
             });
-        });
 
-        node.dependency_names.stacks.as_ref().map_or((), |projects| {
-            projects.iter().for_each(|project| {
-                let s_fqn = format!("{}.{}.{}", stack_name, "stack".to_string(), project);
-                match self.incoming_edges.get_mut(project) {
-                    Some(edges) => {
-                        edges.push(node.fqn.clone());
+        node.dependency_names
+            .stacks
+            .as_ref()
+            .map_or((), |projects| {
+                projects.iter().for_each(|project| {
+                    let s_fqn = format!("{}.{}.{}", stack_name, "stack".to_string(), project);
+                    match self.incoming_edges.get_mut(project) {
+                        Some(edges) => {
+                            edges.push(node.fqn.clone());
+                        }
+                        None => {
+                            let mut edges = Vec::new();
+                            edges.push(node.fqn.clone());
+                            self.incoming_edges.insert(s_fqn.clone(), edges);
+                        }
                     }
-                    None => {
-                        let mut edges = Vec::new();
-                        edges.push(node.fqn.clone());
-                        self.incoming_edges.insert(s_fqn.clone(), edges);
-                    }
-                }
+                });
             });
-        });
     }
-
 }
 
 pub struct Resolver {
@@ -214,7 +225,10 @@ impl Resolver {
         Ok(graph)
     }
 
-    fn resolve_meta(&self, meta_file: &str) -> Result<Box<Option<ArtifactNodeRepr>>, Box<dyn Error>> {
+    fn resolve_meta(
+        &self,
+        meta_file: &str,
+    ) -> Result<Box<Option<ArtifactNodeRepr>>, Box<dyn Error>> {
         if meta_file != "" {
             let torb_path = torb_path();
             let artifacts_path = torb_path.join("torb-artifacts");
@@ -302,6 +316,7 @@ impl Resolver {
         service_name: &str,
         artifact_path: PathBuf,
         inputs: IndexMap<String, String>,
+        values: serde_yaml::Value
     ) -> Result<ArtifactNodeRepr, Box<dyn Error>> {
         let services_path = artifact_path.join("services");
         let service_path = services_path.join(service_name);
@@ -319,11 +334,7 @@ impl Resolver {
         Ok(node)
     }
 
-    fn reconcile_build_step(
-        &self,
-        build_step: BuildStep,
-        new_build_step: BuildStep
-    ) -> BuildStep {
+    fn reconcile_build_step(&self, build_step: BuildStep, new_build_step: BuildStep) -> BuildStep {
         let registry = if new_build_step.registry != "" {
             new_build_step.registry
         } else {
@@ -348,12 +359,11 @@ impl Resolver {
             build_step.tag
         };
 
-
-        BuildStep{
+        BuildStep {
             registry,
             tag,
             dockerfile,
-            script_path
+            script_path,
         }
     }
 
@@ -365,7 +375,8 @@ impl Resolver {
         project_name: &str,
         artifact_path: PathBuf,
         inputs: IndexMap<String, String>,
-        build_config: Option<&Value>
+        build_config: Option<&Value>,
+        values: serde_yaml::Value,
     ) -> Result<ArtifactNodeRepr, Box<dyn Error>> {
         let projects_path = artifact_path.join("projects");
         let project_path = projects_path.join(project_name);
@@ -382,7 +393,7 @@ impl Resolver {
             Some(build) => {
                 let temp = serde_yaml::from_value(build.clone())?;
                 self.reconcile_build_step(build_step, temp)
-            },
+            }
             None => {
                 let temp = BuildStep {
                     registry: "".to_string(),
@@ -399,6 +410,7 @@ impl Resolver {
         node.fqn = format!("{}.{}.{}", stack_name, stack_kind_name, node_name);
         node.file_path = node_fp;
         node.validate_map_and_set_inputs(inputs);
+        node.values = serde_yaml::to_string(&values).expect("Unable to convert values yaml to string.");
 
         Ok(node)
     }
@@ -432,22 +444,24 @@ impl Resolver {
                 .ok_or("Could not convert path to string.")?
                 .to_string(),
             Some(graph),
-            Some(Vec::new())
+            Some(Vec::new()),
+            "".to_string(),
         );
 
         Ok(node)
     }
 
-    fn deserialize_params(params: Option<&serde_yaml::Value>) -> Result<IndexMap<String, String>, Box<dyn Error>> {
+    fn deserialize_params(
+        params: Option<&serde_yaml::Value>,
+    ) -> Result<IndexMap<String, String>, Box<dyn Error>> {
         match params {
             Some(params) => {
-                let deserialized_params: IndexMap<String, String> = serde_yaml::from_value(params.clone())?;
+                let deserialized_params: IndexMap<String, String> =
+                    serde_yaml::from_value(params.clone())?;
 
                 Ok(deserialized_params)
-            },
-            None => {
-                Ok(IndexMap::new())
             }
+            None => Ok(IndexMap::new()),
         }
     }
 
@@ -476,10 +490,21 @@ impl Resolver {
         let home_dir = dirs::home_dir().unwrap();
         let torb_path = home_dir.join(".torb");
         let artifacts_path = torb_path.join("torb-artifacts");
-        let inputs = Resolver::deserialize_params(yaml.get("inputs")).expect("Unable to deserialize inputs.");
+        let inputs = Resolver::deserialize_params(yaml.get("inputs"))
+            .expect("Unable to deserialize inputs.");
+
+        let config_values = yaml
+            .get("values")
+            .unwrap_or(&serde_yaml::Value::Null);
+
         let mut node = match stack_kind_name {
             "service" => {
-                let service_name = yaml.get("service").ok_or(err)?.as_str().expect("Unable to parse service name.");
+                let service_name = yaml
+                    .get("service")
+                    .ok_or(err)?
+                    .as_str()
+                    .expect("Unable to parse service name.");
+
                 self.resolve_service(
                     stack_name,
                     stack_kind_name,
@@ -487,10 +512,15 @@ impl Resolver {
                     service_name,
                     artifacts_path,
                     inputs,
+                    config_values.clone()
                 )
             }
             "project" => {
-                let project_name = yaml.get("project").ok_or(err)?.as_str().expect("Unable to parse project name.");
+                let project_name = yaml
+                    .get("project")
+                    .ok_or(err)?
+                    .as_str()
+                    .expect("Unable to parse project name.");
                 let build_config = yaml.get("build");
                 self.resolve_project(
                     stack_name,
@@ -499,7 +529,8 @@ impl Resolver {
                     project_name,
                     artifacts_path,
                     inputs,
-                    build_config
+                    build_config,
+                    config_values.clone(),
                 )
             }
             // TODO(Ian): Revisit nested stacks after MVP.
@@ -514,6 +545,7 @@ impl Resolver {
             // }
             _ => return Err(Box::new(err)),
         }?;
+
         let dep_values = yaml.get("deps");
         match dep_values {
             Some(deps) => {

@@ -14,7 +14,7 @@ thiserror = "1.0"
 sha2 = "0.10.2"
 base64ct = { version = "1.5.1", features = ["alloc"] }
 serde_json = "1.0.85"
-hcl-rs = "0.6.5"
+hcl-rs = "0.10.0"
 indexmap = "1.9.1"
 memorable-wordlist = "0.1.7"
 ureq = { version = "2.5.0", features = ["json"] }

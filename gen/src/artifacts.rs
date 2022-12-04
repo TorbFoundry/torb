@@ -62,6 +62,8 @@ pub struct ArtifactNodeRepr {
     #[serde(skip)]
     pub stack_graph: Option<StackGraph>,
     pub files: Option<Vec<String>>,
+    #[serde(default = "String::new")]
+    pub values: String,
 }
 
 impl ArtifactNodeRepr {
@@ -80,6 +82,7 @@ impl ArtifactNodeRepr {
         file_path: String,
         stack_graph: Option<StackGraph>,
         files: Option<Vec<String>>,
+        values: String,
     ) -> ArtifactNodeRepr {
         ArtifactNodeRepr {
             fqn: fqn,
@@ -101,7 +104,8 @@ impl ArtifactNodeRepr {
             },
             file_path,
             stack_graph,
-            files
+            files,
+            values
         }
     }
 

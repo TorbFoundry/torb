@@ -120,6 +120,41 @@ impl<'a> Composer<'a> {
             .expect("Unable to map input address to node, make sure your mapping is correct.")
     }
 
+    fn interpolate_inputs_into_helm_values(&self, value: &serde_yaml::Value) -> serde_yaml::Value {
+        match value {
+            serde_yaml::Value::String(s) => {
+                if s.starts_with("self.") {
+                    let torb_input_address = InputAddress::try_from(s.as_str());
+                    let output_value = self.input_values_from_input_address(torb_input_address);
+                    let mut string_value = hcl::to_string(&output_value).unwrap(); 
+                    
+                    string_value = format!("${{{}}}", string_value);
+
+                    serde_yaml::Value::String(string_value)
+                } else {
+                    serde_yaml::Value::String(s.to_string())
+                }
+            }
+            serde_yaml::Value::Mapping(m) => {
+                let mut new_mapping = serde_yaml::Mapping::new();
+                for (k, v) in m {
+                    new_mapping[k] = self.interpolate_inputs_into_helm_values(v);
+                }
+
+                serde_yaml::Value::Mapping(new_mapping)
+            }
+            serde_yaml::Value::Sequence(s) => {
+                let mut new_seq = serde_yaml::Sequence::new();
+                for v in s {
+                    new_seq.push(self.interpolate_inputs_into_helm_values(v).to_owned());
+                }
+
+                serde_yaml::Value::Sequence(new_seq)
+            }
+            _ => serde_yaml::Value::Null,
+        }
+    }
+
     fn k8s_value_from_reserved_input(&self, torb_input_address: InputAddress) -> Expression {
         let output_node = self.get_node_for_output_value(&torb_input_address);
 
@@ -343,36 +378,38 @@ impl<'a> Composer<'a> {
 
     fn create_input_values(&self, node: &ArtifactNodeRepr) -> Vec<Object<ObjectKey, Expression>> {
         let mut input_vals = Vec::<Object<ObjectKey, Expression>>::new();
+
         for (_, (spec, value)) in node.mapped_inputs.iter() {
             let input_address_result = InputAddress::try_from(value.clone().as_str());
             
             let mut input: Object<ObjectKey, Expression> = Object::new();
 
-            input.insert(ObjectKey::String("name".to_string()), Expression::String(spec.clone()));
-
-            match input_address_result {
-                Ok(input_address) => {
-                    if reserved_outputs().contains_key(input_address.property_specifier.as_str()) {
-                        let val = self.k8s_value_from_reserved_input(input_address);
-                        input.insert(ObjectKey::String("value".to_string()), val.clone());
-
-                    } else {
-                        let val = self.k8s_status_values_path_from_torb_input(input_address);
-
-                        input.insert(ObjectKey::String("value".to_string()), Expression::Raw(RawExpression::new(val.clone())));
-                    }
-                },
-                Err(input_result) => {
-                    input.insert(ObjectKey::String("value".to_string()), Expression::String(input_result));
-                },
-            };
+            input.insert(ObjectKey::Expression(Expression::String("name".to_string())), Expression::String(spec.clone()));
+            input.insert(ObjectKey::Expression(Expression::String("value".to_string())), self.input_values_from_input_address(input_address_result));
 
             input_vals.push(input);
         }
 
-
         input_vals
+    }
 
+    fn input_values_from_input_address(&self, input_address: Result<InputAddress, String>) -> Expression {
+        match input_address {
+            Ok(input_address) => {
+                if reserved_outputs().contains_key(input_address.property_specifier.as_str()) {
+                    let val = self.k8s_value_from_reserved_input(input_address);
+                    val.clone()
+
+                } else {
+                    let val = self.k8s_status_values_path_from_torb_input(input_address);
+
+                    Expression::Raw(RawExpression::new(val.clone()))
+                }
+            },
+            Err(input_result) => {
+                Expression::String(input_result)
+            },
+        }
     }
 
     fn add_required_providers_to_main_struct(&mut self) {
@@ -475,6 +512,12 @@ impl<'a> Composer<'a> {
         let output_block = self.create_output_data_block(node)?;
 
         let inputs = self.create_input_values(node);
+        let yaml_string = node.values.as_str();
+        let serde_value: serde_yaml::Value = serde_yaml::from_str(yaml_string).unwrap_or(serde_yaml::Value::Null);
+
+        let mapped_values = self.interpolate_inputs_into_helm_values(&serde_value);
+
+        values.push(serde_yaml::to_string(&mapped_values).expect("Unable to convert values config to yaml."));
 
         let mut builder = std::mem::take(&mut self.main_struct);
 
