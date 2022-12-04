@@ -83,7 +83,9 @@ impl<'a> StackInitializer<'a> {
         let start_option: Option<usize> = script_step.find(TOKEN);
         match start_option {
             Some(start) => {
-                let end = script_step.split_at(start).1.find(" ").unwrap_or(script_step.len());
+                let mut end = script_step.split_at(start).1.find(" ").unwrap_or(script_step.len());
+                end = script_step.split_at(start).1.find("/").unwrap_or(end);
+
 
                 println!("Script Step: {}", script_step);
                 println!("Default End: {}", script_step.len() - start);
