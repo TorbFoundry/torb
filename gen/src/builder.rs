@@ -63,8 +63,12 @@ impl<'a> StackBuilder<'a> {
         registry: String,
     ) -> Result<Vec<Output>, TorbBuilderErrors> {
         let current_dir = std::env::current_dir().unwrap();
-
-
+        let dockerfile_dir = current_dir.join(name);
+        println!("Dockerfile dir: {:?}", dockerfile_dir);
+        println!("Dockerfile dir: {:?}", dockerfile_dir);
+        println!("Dockerfile dir: {:?}", dockerfile_dir);
+        println!("Dockerfile dir: {:?}", dockerfile_dir);
+        println!("Dockerfile dir: {:?}", dockerfile_dir);
         let label = if registry != "" {
             format!("{}:{}", registry, tag)
         } else {
@@ -74,14 +78,14 @@ impl<'a> StackBuilder<'a> {
         let mut commands = vec![CommandConfig::new(
             "docker",
             vec!["build", "-t", &label, ".", "-f", &dockerfile],
-            Some(&current_dir.to_str().unwrap()),
+            Some(&dockerfile_dir.to_str().unwrap()),
         )];
 
         if registry != "" {
             commands.push(CommandConfig::new(
                 "docker",
                 vec!["push", &label],
-                Some(&current_dir.to_str().unwrap()),
+                Some(&dockerfile_dir.to_str().unwrap()),
             ));
         }
 

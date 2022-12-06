@@ -143,7 +143,7 @@ impl CommandPipeline {
             println!("Command success: {:?}", output.stdout.clone());
             Ok(output)
         } else {
-            println!("Command failed: {:?}", output.stderr.clone());
+            println!("Command failed: {:?}", std::str::from_utf8(&output.stderr));
             Err(Box::new(TorbUtilityErrors::UnableToRunCommand {
                 command: format!("{:?}", command),
                 reason: String::from_utf8(output.stderr).unwrap(),

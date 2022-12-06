@@ -29,7 +29,7 @@ fn kebab_to_snake_case(input: &str) -> String {
     input.replace("-", "_")
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct InputAddress {
     locality: String,
     node_type: String,
@@ -125,10 +125,26 @@ impl<'a> Composer<'a> {
             serde_yaml::Value::String(s) => {
                 if s.starts_with("self.") {
                     let torb_input_address = InputAddress::try_from(s.as_str());
-                    let output_value = self.input_values_from_input_address(torb_input_address);
-                    let mut string_value = hcl::to_string(&output_value).unwrap(); 
+                    let output_value = self.input_values_from_input_address(torb_input_address.clone());
+                    let mut string_value = hcl::format::to_string(&output_value).unwrap(); 
+
+                    string_value = match torb_input_address {
+                        Ok(input_address) => {
+                            if reserved_outputs().contains_key(input_address.property_specifier.as_str()) {
+                                string_value.replace("\"", "")
+                            } else {
+                                format!("${{{}}}", string_value.replace("\"", ""))
+                            }
+                        },
+                        Err(s) => {
+                            s
+                        }
+                    };
+                    println!("string_value: {:?}", string_value);
+                    println!("string_value: {:?}", string_value);
+                    println!("string_value: {:?}", string_value);
+                    println!("string_value: {:?}", string_value);
                     
-                    string_value = format!("${{{}}}", string_value);
 
                     serde_yaml::Value::String(string_value)
                 } else {
@@ -138,7 +154,7 @@ impl<'a> Composer<'a> {
             serde_yaml::Value::Mapping(m) => {
                 let mut new_mapping = serde_yaml::Mapping::new();
                 for (k, v) in m {
-                    new_mapping[k] = self.interpolate_inputs_into_helm_values(v);
+                    new_mapping.insert(k.clone(), self.interpolate_inputs_into_helm_values(v));
                 }
 
                 serde_yaml::Value::Mapping(new_mapping)
@@ -150,6 +166,12 @@ impl<'a> Composer<'a> {
                 }
 
                 serde_yaml::Value::Sequence(new_seq)
+            }
+            serde_yaml::Value::Number(n) => {
+                serde_yaml::Value::Number(n.to_owned())
+            }
+            serde_yaml::Value::Bool(b) => {
+                serde_yaml::Value::Bool(b.to_owned())
             }
             _ => serde_yaml::Value::Null,
         }
@@ -512,12 +534,14 @@ impl<'a> Composer<'a> {
         let output_block = self.create_output_data_block(node)?;
 
         let inputs = self.create_input_values(node);
-        let yaml_string = node.values.as_str();
-        let serde_value: serde_yaml::Value = serde_yaml::from_str(yaml_string).unwrap_or(serde_yaml::Value::Null);
+        let yaml_str = node.values.as_str();
+        let serde_value: serde_yaml::Value = serde_yaml::from_str(yaml_str).unwrap_or(serde_yaml::Value::Null);
 
         let mapped_values = self.interpolate_inputs_into_helm_values(&serde_value);
 
-        values.push(serde_yaml::to_string(&mapped_values).expect("Unable to convert values config to yaml."));
+        let yaml_string = serde_yaml::to_string(&mapped_values).expect("Unable to convert values config to yaml.");
+
+        values.push(yaml_string);
 
         let mut builder = std::mem::take(&mut self.main_struct);
 

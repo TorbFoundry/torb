@@ -329,6 +329,7 @@ impl Resolver {
             .ok_or("Could not convert path to string.")?
             .to_string();
         node.file_path = node_fp;
+        node.values = serde_yaml::to_string(&values).expect("Unable to convert values yaml to string.");
         node.validate_map_and_set_inputs(inputs);
 
         Ok(node)
