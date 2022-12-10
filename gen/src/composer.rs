@@ -29,6 +29,10 @@ fn kebab_to_snake_case(input: &str) -> String {
     input.replace("-", "_")
 }
 
+fn snake_case_to_kebab(input: &str) -> String {
+    input.replace("_", "-")
+}
+
 #[derive(Debug, Clone)]
 struct InputAddress {
     locality: String,
@@ -183,7 +187,7 @@ impl<'a> Composer<'a> {
         match torb_input_address.property_specifier.as_str() {
             "host" => {
                 let name = format!("{}-{}", self.release_name, output_node.name);
-                let namespace = self.artifact_repr.stack_name.clone();
+                let namespace = snake_case_to_kebab(&self.artifact_repr.stack_name);
 
                 Expression::String(format!("{}.{}.svc.cluster.local", name, namespace))
             },

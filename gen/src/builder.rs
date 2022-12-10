@@ -69,7 +69,7 @@ impl<'a> StackBuilder<'a> {
         println!("Dockerfile dir: {:?}", dockerfile_dir);
         println!("Dockerfile dir: {:?}", dockerfile_dir);
         println!("Dockerfile dir: {:?}", dockerfile_dir);
-        let label = if registry != "" {
+        let label = if registry != "local" {
             format!("{}:{}", registry, tag)
         } else {
             format!("{}:{}", name, tag)
