@@ -142,8 +142,8 @@ fn compose_build_environment(build_hash: String, build_artifact: &ArtifactRepr) 
     composer.compose().unwrap();
 }
 
-fn run_dependency_build_steps(_build_hash: String, build_artifact: &ArtifactRepr, dryrun: bool) -> Result<(), Box<dyn std::error::Error>> {
-    let mut builder = StackBuilder::new(build_artifact, dryrun);
+fn run_dependency_build_steps(_build_hash: String, build_artifact: &ArtifactRepr, build_platform_string: String, dryrun: bool) -> Result<(), Box<dyn std::error::Error>> {
+    let mut builder = StackBuilder::new(build_artifact, build_platform_string, dryrun);
 
     builder.build()
 }
@@ -265,6 +265,11 @@ fn main() {
                         .short('d')
                         .takes_value(false)
                         .help("Dry run. Don't actually build the stack."),
+                ).arg(
+                    Arg::new("--platforms")
+                        .short('p')
+                        .default_values(&["linux/amd64", "linux/arm64"])
+                        .help("Comma separated list of platforms to build docker images for."),
                 ),
         )
         .subcommand(SubCommand::with_name("deploy-stack")
@@ -327,6 +332,14 @@ fn main() {
                 .unwrap()
                 .value_of("--dryrun");
 
+            let build_platforms_string = cli_matches
+                .subcommand_matches("build-stack")
+                .unwrap()
+                .values_of("--platforms")
+                .unwrap()
+                .collect::<Vec<&str>>()
+                .join(",");
+
             if let Some(file_path) = file_path_option {
                 println!("Attempting to read or create buildstate folder...");
                 buildstate_path_or_create();
@@ -342,6 +355,7 @@ fn main() {
                 run_dependency_build_steps(
                     build_hash.clone(),
                     &build_artifact,
+                    build_platforms_string,
                     dryrun_option.is_some(),
                 ).expect("Unable to build required images/artifacts for nodes.");
 
