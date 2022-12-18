@@ -493,7 +493,7 @@ impl<'a> Composer<'a> {
                 image_key_map.insert("tag".to_string(), "latest".to_string());
             }
             
-            if build_step.registry != "" {
+            if build_step.registry != "local" {
                 image_key_map.insert("repository".to_string(), build_step.registry);
             } else {
                 image_key_map.insert("repository".to_string(), node.name.clone());
