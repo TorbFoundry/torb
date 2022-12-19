@@ -6,7 +6,7 @@ use thiserror::Error;
 use ureq::{AgentBuilder};
 
 #[derive(Error, Debug)]
-pub enum TorbVSCErrors {
+pub enum TorbVCSErrors {
     #[error("Cannot create repo directory at: {path:?}, reason: {response:?}")]
     UnableToCreateLocalRepoDir { path: PathBuf, response: String },
     #[error("Unable to init local git repo, reason: {response:?}")]
@@ -28,14 +28,14 @@ impl<'a> Or for &'a str {
     }
 }
 mod private {
-    use super::GithubVSC;
+    use super::GithubVCS;
 
     pub trait Sealed {}
-    impl Sealed for GithubVSC {}
+    impl Sealed for GithubVCS {}
 }
 
 pub trait GitVersionControlHelpers: private::Sealed {
-    fn init_readme(&self) -> Result<(), TorbVSCErrors> {
+    fn init_readme(&self) -> Result<(), TorbVCSErrors> {
         let repo_name = self.get_repo_name().unwrap().to_string();
         let error_msg_ga_readme = "Failed to git add README.md";
         let error_msg_commit_readme = "Failed to git commit README.md";
@@ -74,13 +74,13 @@ pub trait GitVersionControlHelpers: private::Sealed {
                 Ok(())
             }
         }).map_err(|err| {
-            TorbVSCErrors::UnableToInitReadme {
+            TorbVCSErrors::UnableToInitReadme {
                 response: String::from_utf8(err).unwrap()
             }
         })
     }
 
-    fn add_remote_origin(&self) -> Result<(), TorbVSCErrors> {
+    fn add_remote_origin(&self) -> Result<(), TorbVCSErrors> {
         let repo_name = self.get_repo_name().unwrap().to_string();
         let error_msg_remote = format!("Failed to add remote: {:?}", repo_name);
         let remote_repo = format!("{}:{}/{}", self.get_address(), self.get_user(), repo_name);
@@ -96,7 +96,7 @@ pub trait GitVersionControlHelpers: private::Sealed {
             .expect(&error_msg_remote);
 
         if !git_remote_command.status.success() {
-            Err(TorbVSCErrors::UnableToInitLocalGitRepo {
+            Err(TorbVCSErrors::UnableToInitLocalGitRepo {
                 response: String::from_utf8(git_remote_command.stderr).unwrap(),
             })
         } else {
@@ -104,7 +104,7 @@ pub trait GitVersionControlHelpers: private::Sealed {
         }
     }
 
-    fn create_main_branch(&self) -> Result<(), TorbVSCErrors> {
+    fn create_main_branch(&self) -> Result<(), TorbVCSErrors> {
         let error_msg_main = "Failed to sync main branch.".to_string();
         let git_main_branch = Command::new("git")
             .arg("branch")
@@ -115,7 +115,7 @@ pub trait GitVersionControlHelpers: private::Sealed {
             .expect(&error_msg_main);
 
         if !git_main_branch.status.success() {
-            Err(TorbVSCErrors::UnableToSyncRemoteRepo {
+            Err(TorbVCSErrors::UnableToSyncRemoteRepo {
                 response: String::from_utf8(git_main_branch.stderr).unwrap(),
             })
         } else {
@@ -123,7 +123,7 @@ pub trait GitVersionControlHelpers: private::Sealed {
         }
     }
 
-    fn push_new_main(&self) -> Result<(), TorbVSCErrors> {
+    fn push_new_main(&self) -> Result<(), TorbVCSErrors> {
         let error_msg_push = "Failed to push to remote.".to_string();
         let mut git_push_main = Command::new("git");
 
@@ -139,7 +139,7 @@ pub trait GitVersionControlHelpers: private::Sealed {
             .expect(&error_msg_push);
 
         if !res.status.success() {
-            Err(TorbVSCErrors::UnableToPushToRemoteRepo {
+            Err(TorbVCSErrors::UnableToPushToRemoteRepo {
                 response: String::from_utf8(res.stderr).unwrap(),
             })
         } else {
@@ -188,9 +188,11 @@ pub trait GitVersionControl: GitVersionControlHelpers {
 
             if git_command.status.success() {
                 if let Some(_remote) = self.get_repo_name() {
-                    self.add_remote_origin()
+                    self.init_readme()
+                        .and_then(|_arg| {
+                            self.add_remote_origin()
+                        })
                         .and_then(|_arg| { self.create_main_branch() })
-                        .and_then(|_arg| { self.init_readme() })
                         .and_then(|_arg| { self.push_new_main() } )?;
 
                     Ok(self.get_cwd().clone())
@@ -198,13 +200,13 @@ pub trait GitVersionControl: GitVersionControlHelpers {
                     Ok(self.get_cwd().clone())
                 }
             } else {
-                Err(Box::new(TorbVSCErrors::UnableToCreateLocalRepoDir {
+                Err(Box::new(TorbVCSErrors::UnableToCreateLocalRepoDir {
                     path: self.get_cwd(),
                     response: String::from_utf8(git_command.stderr).unwrap(),
                 }))
             }
         } else {
-            let err = TorbVSCErrors::UnableToInitLocalGitRepo {
+            let err = TorbVCSErrors::UnableToInitLocalGitRepo {
                 response: std::str::from_utf8(&mkdir.stderr)?.to_string(),
             };
 
@@ -251,7 +253,7 @@ pub trait GitVersionControl: GitVersionControlHelpers {
     }
 }
 
-pub struct GithubVSC {
+pub struct GithubVCS {
     api_token: String,
     user: String,
     agent: ureq::Agent,
@@ -259,7 +261,7 @@ pub struct GithubVSC {
     cwd: PathBuf,
 }
 
-impl GitVersionControlHelpers for GithubVSC {
+impl GitVersionControlHelpers for GithubVCS {
     fn get_user(&self) -> String {
         self._get_user()
     }
@@ -273,7 +275,7 @@ impl GitVersionControlHelpers for GithubVSC {
     }
 }
 
-impl GitVersionControl for GithubVSC {
+impl GitVersionControl for GithubVCS {
     fn create_remote_repo(&self) -> Result<String, Box<dyn std::error::Error>> {
         let name = self.get_repo_name().unwrap();
 
@@ -324,11 +326,11 @@ impl GitVersionControl for GithubVSC {
     }
 }
 
-impl GithubVSC {
-    pub fn new(api_token: String, user: String) -> GithubVSC {
+impl GithubVCS {
+    pub fn new(api_token: String, user: String) -> GithubVCS {
         let agent = AgentBuilder::new().build();
 
-        GithubVSC {
+        GithubVCS {
             api_token: api_token,
             user: user,
             agent: agent,

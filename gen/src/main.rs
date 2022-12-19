@@ -6,9 +6,9 @@ mod deployer;
 mod initializer;
 mod resolver;
 mod utils;
-mod vsc;
+mod vcs;
+mod cli;
 
-use clap::{App, Arg, SubCommand};
 use std::fs;
 use std::fs::File;
 use std::io;
@@ -21,9 +21,10 @@ use crate::artifacts::{load_build_file, get_build_file_info, deserialize_stack_y
 use crate::composer::Composer;
 use crate::config::TORB_CONFIG;
 use crate::initializer::StackInitializer;
-use crate::vsc::{GitVersionControl, GithubVSC};
+use crate::vcs::{GitVersionControl, GithubVCS};
 use crate::builder::{StackBuilder};
 use crate::deployer::{StackDeployer};
+use crate::cli::cli;
 
 const VERSION: &'static str = env!("CARGO_PKG_VERSION");
 
@@ -88,7 +89,7 @@ fn init() {
 
 fn create_repo(path: String, local_only: bool) {
     if !std::path::Path::new(&path).exists() {
-        let mut vsc = GithubVSC::new(
+        let mut vcs = GithubVCS::new(
             TORB_CONFIG.githubToken.clone(),
             TORB_CONFIG.githubUser.clone(),
         );
@@ -96,9 +97,9 @@ fn create_repo(path: String, local_only: bool) {
         let mut buf = std::path::PathBuf::new();
         buf.push(path);
 
-        vsc.set_cwd(buf);
+        vcs.set_cwd(buf);
 
-        vsc.create_repo(local_only)
+        vcs.create_repo(local_only)
             .expect("Failed to create repo.");
     } else {
         println!("Repo already exists locally. Skipping creation.");
@@ -203,200 +204,114 @@ fn pull_stack(
 }
 
 fn main() {
-    let cli = App::new("torb")
-        .version("1.0.0")
-        .author("Torb Foundry")
-        .subcommand(SubCommand::with_name("version").about("Get the version of this torb."))
-        .subcommand(
-            SubCommand::with_name("init").about("Initialize Torb, download artifacts and tools."),
-        )
-        .subcommand(
-            SubCommand::with_name("create-repo")
-                .about("Create a new repository for a Torb stack.")
-                .arg(
-                    Arg::with_name("path")
-                        .takes_value(true)
-                        .required(true)
-                        .index(1)
-                        .help("Path of the repo to create."),
-                )
-                .arg(
-                    Arg::new("--local-only")
-                        .short('l')
-                        .required(false)
-                        .takes_value(false)
-                        .help("Only create the repo locally."),
-                ),
-        )
-        .subcommand(
-            SubCommand::with_name("checkout-stack")
-                .about("Add a stack template to your current directory.")
-                .arg(
-                    Arg::with_name("name")
-                        .takes_value(true)
-                        .required(false)
-                        .index(1)
-                        .help("Name of the stack template to checkout."),
-                ),
-        )
-        .subcommand(
-            SubCommand::with_name("init-stack")
-                .about("Run any init steps for a stack's dependencies.")
-                .arg(
-                    Arg::with_name("file")
-                        .takes_value(true)
-                        .required(true)
-                        .index(1)
-                        .help("File path of the stack definition file."),
-                ),
-        )
-        .subcommand(
-            SubCommand::with_name("build-stack")
-                .about("Build a stack from a stack definition file.")
-                .arg(
-                    Arg::with_name("file")
-                        .takes_value(true)
-                        .required(true)
-                        .index(1)
-                        .help("File path of the stack definition file."),
-                )
-                .arg(
-                    Arg::new("--dryrun")
-                        .short('d')
-                        .takes_value(false)
-                        .help("Dry run. Don't actually build the stack."),
-                ).arg(
-                    Arg::new("--platforms")
-                        .short('p')
-                        .default_values(&["linux/amd64", "linux/arm64"])
-                        .help("Comma separated list of platforms to build docker images for."),
-                ),
-        )
-        .subcommand(SubCommand::with_name("deploy-stack")
-        .about("Deploy a stack from a stack definition file.")
-        .arg(
-            Arg::with_name("file")
-                .takes_value(true)
-                .required(true)
-                .index(1)
-                .help("File path of the stack definition file."),
-        ).arg(Arg::new("--dryrun")
-            .short('d')
-            .takes_value(false)
-            .help("Dry run. Don't actually deploy the stack.")))
-        .subcommand(SubCommand::with_name("list-stacks").about("List all available stacks."));
+    let cli_app = cli();
 
-    let cli_matches = cli.get_matches();
+    let cli_matches = cli_app.get_matches();
 
     match cli_matches.subcommand_name() {
         Some("init") => {
             init();
         }
-        Some("create-repo") => {
-            let path_option = cli_matches
-                .subcommand_matches("create-repo")
-                .unwrap()
-                .value_of("path");
+        Some("repo") => {
+            let mut subcommand = cli_matches.subcommand_matches("repo").unwrap();
+            match subcommand.subcommand_name() {
+                Some("create") => {
+                    subcommand = subcommand.subcommand_matches("create").unwrap();
+                    let path_option = subcommand.value_of("path");
+                    let local_option = subcommand.value_of("--local-only");
 
-            let local_option = cli_matches
-                .subcommand_matches("create-repo")
-                .unwrap()
-                .value_of("--local-only");
-
-            create_repo(path_option.unwrap().to_string(), local_option.is_some());
-        }
-        Some("checkout-stack") => {
-            let name_option = cli_matches
-                .subcommand_matches("checkout-stack")
-                .unwrap()
-                .value_of("name");
-
-            checkout_stack(name_option);
-        }
-        Some("init-stack") => {
-            let file_path_option = cli_matches
-                .subcommand_matches("init-stack")
-                .unwrap()
-                .value_of("file");
-
-            init_stack(file_path_option.unwrap().to_string())
-        }
-        Some("build-stack") => {
-            let file_path_option = cli_matches
-                .subcommand_matches("build-stack")
-                .unwrap()
-                .value_of("file");
-
-            let dryrun_option = cli_matches
-                .subcommand_matches("build-stack")
-                .unwrap()
-                .value_of("--dryrun");
-
-            let build_platforms_string = cli_matches
-                .subcommand_matches("build-stack")
-                .unwrap()
-                .values_of("--platforms")
-                .unwrap()
-                .collect::<Vec<&str>>()
-                .join(",");
-
-            if let Some(file_path) = file_path_option {
-                println!("Attempting to read or create buildstate folder...");
-                buildstate_path_or_create();
-                println!("Attempting to read and build stack: {}", file_path);
-                let contents = fs::read_to_string(file_path)
-                    .expect("Something went wrong reading the stack file.");
-
-                let (build_hash, build_filename, _) = write_build_file(contents);
-
-                let (_, _, build_artifact) =
-                    load_build_file(build_filename).expect("Unable to load build file.");
-
-                run_dependency_build_steps(
-                    build_hash.clone(),
-                    &build_artifact,
-                    build_platforms_string,
-                    dryrun_option.is_some(),
-                ).expect("Unable to build required images/artifacts for nodes.");
-
-                compose_build_environment(build_hash.clone(), &build_artifact);
+                    create_repo(path_option.unwrap().to_string(), local_option.is_some());
+                }
+                _ => {
+                    println!("No subcommand specified.");
+                }
             }
         }
-        Some("deploy-stack") => {
-            let file_path_option = cli_matches
-                .subcommand_matches("deploy-stack")
-                .unwrap()
-                .value_of("file");
+        Some("stack") => {
+            let mut subcommand = cli_matches.subcommand_matches("stack").unwrap();
+            match subcommand.subcommand_name() {
+                Some("checkout") => {
+                    let name_option = subcommand
+                        .subcommand_matches("checkout")
+                        .unwrap()
+                        .value_of("name");
 
-            let dryrun_option = cli_matches
-                .subcommand_matches("deploy-stack")
-                .unwrap()
-                .value_of("--dryrun");
+                    checkout_stack(name_option);
+                }
+                Some("init") => {
+                    let file_path_option = subcommand
+                        .subcommand_matches("init")
+                        .unwrap()
+                        .value_of("file");
 
-            if let Some(file_path) = file_path_option {
-                println!("Attempting to read and deploy stack: {}", file_path);
-                let contents = fs::read_to_string(file_path)
-                    .expect("Something went wrong reading the stack file.");
+                    init_stack(file_path_option.unwrap().to_string())
+                }
+                Some("build") => {
+                    subcommand = subcommand.subcommand_matches("build").unwrap();
+                    let file_path_option = subcommand.value_of("file");
+                    let dryrun_option = subcommand.value_of("--dryrun");
+                    let build_platforms_string = subcommand
+                        .values_of("--platforms")
+                        .unwrap()
+                        .collect::<Vec<&str>>()
+                        .join(",");
 
-                let artifact = deserialize_stack_yaml_into_artifact(&contents).expect("Unable to read stack file into internal representation.");
-                
-                let (build_hash, build_filename, _) = get_build_file_info(&artifact).expect("Unable to get build file info for stack.");
-                println!("build_filename: {}", build_filename);
-                let (_, _, build_artifact) =
-                    load_build_file(build_filename).expect("Unable to load build file.");
+                    if let Some(file_path) = file_path_option {
+                        println!("Attempting to read or create buildstate folder...");
+                        buildstate_path_or_create();
+                        println!("Attempting to read and build stack: {}", file_path);
+                        let contents = fs::read_to_string(file_path)
+                            .expect("Something went wrong reading the stack file.");
 
-                run_deploy_steps(
-                    build_hash.clone(),
-                    &build_artifact,
-                    dryrun_option.is_some(),
-                ).expect("Unable to deploy required images/artifacts for nodes.");
-            }
-        }
-        Some("list-stacks") => {
-            println!("Listing stacks");
-            let stack_manifest = load_stack_manifest();
-            for (key, _) in stack_manifest.as_mapping().unwrap().iter() {
-                println!("{}", key.as_str().unwrap());
+                        let (build_hash, build_filename, _) = write_build_file(contents);
+
+                        let (_, _, build_artifact) =
+                            load_build_file(build_filename).expect("Unable to load build file.");
+
+                        run_dependency_build_steps(
+                            build_hash.clone(),
+                            &build_artifact,
+                            build_platforms_string,
+                            dryrun_option.is_some(),
+                        ).expect("Unable to build required images/artifacts for nodes.");
+
+                        compose_build_environment(build_hash.clone(), &build_artifact);
+                    }
+                }
+                Some("deploy") => {
+                    subcommand = subcommand.subcommand_matches("deploy").unwrap();
+                    let file_path_option = subcommand.value_of("file");
+                    let dryrun_option = subcommand.value_of("--dryrun");
+
+                    if let Some(file_path) = file_path_option {
+                        println!("Attempting to read and deploy stack: {}", file_path);
+                        let contents = fs::read_to_string(file_path)
+                            .expect("Something went wrong reading the stack file.");
+
+                        let artifact = deserialize_stack_yaml_into_artifact(&contents).expect("Unable to read stack file into internal representation.");
+                        
+                        let (build_hash, build_filename, _) = get_build_file_info(&artifact).expect("Unable to get build file info for stack.");
+                        println!("build_filename: {}", build_filename);
+                        let (_, _, build_artifact) =
+                            load_build_file(build_filename).expect("Unable to load build file.");
+
+                        run_deploy_steps(
+                            build_hash.clone(),
+                            &build_artifact,
+                            dryrun_option.is_some(),
+                        ).expect("Unable to deploy required images/artifacts for nodes.");
+                    }
+                }
+                Some("list") => {
+                    println!("\nTorb Stacks:\n");
+                    let stack_manifest = load_stack_manifest();
+                    for (key, _) in stack_manifest.as_mapping().unwrap().iter() {
+                        println!("- {}", key.as_str().unwrap());
+                    }
+                }
+                _ => {
+                    println!("No subcommand specified.");
+                }
             }
         }
         Some("version") => {
