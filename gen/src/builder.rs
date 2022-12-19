@@ -21,16 +21,20 @@ pub struct StackBuilder<'a> {
     artifact: &'a ArtifactRepr,
     built: HashSet<String>,
     dryrun: bool,
-    build_platforms: String
+    build_platforms: String,
 }
 
 impl<'a> StackBuilder<'a> {
-    pub fn new(artifact: &'a ArtifactRepr, build_platforms: String, dryrun: bool) -> StackBuilder<'a> {
+    pub fn new(
+        artifact: &'a ArtifactRepr,
+        build_platforms: String,
+        dryrun: bool,
+    ) -> StackBuilder<'a> {
         StackBuilder {
             artifact: artifact,
             built: HashSet::new(),
             dryrun: dryrun,
-            build_platforms: build_platforms
+            build_platforms: build_platforms,
         }
     }
 
@@ -77,19 +81,41 @@ impl<'a> StackBuilder<'a> {
             format!("{}:{}", name, tag)
         };
 
-        let mut commands = vec![CommandConfig::new(
-            "docker",
-            vec!["buildx", "build", "--platform", &self.build_platforms, "-t", &label, ".", "-f", &dockerfile],
-            Some(&dockerfile_dir.to_str().unwrap()),
-        )];
-
-        if registry != "local" {
-            commands.push(CommandConfig::new(
+        let commands = if registry != "local" {
+            vec![
+                CommandConfig::new(
+                    "docker",
+                    vec![
+                        "buildx",
+                        "build",
+                        "--platform",
+                        &self.build_platforms,
+                        "-t",
+                        &label,
+                        ".",
+                        "-f",
+                        &dockerfile,
+                        "--push"
+                    ],
+                    Some(&dockerfile_dir.to_str().unwrap()),
+                ),
+            ]
+        } else {
+            vec![CommandConfig::new(
                 "docker",
-                vec!["push", &label],
+                vec![
+                    "buildx",
+                    "build",
+                    "-t",
+                    &label,
+                    ".",
+                    "-f",
+                    &dockerfile,
+                    "--load",
+                ],
                 Some(&dockerfile_dir.to_str().unwrap()),
-            ));
-        }
+            )]
+        };
 
         if self.dryrun {
             println!("{:?}", commands);
