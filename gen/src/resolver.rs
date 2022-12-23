@@ -567,39 +567,47 @@ impl Resolver {
             let key_string = key.as_str().unwrap();
             match key_string {
                 "services" => {
-                    for (service_name, service_value) in value.as_mapping().unwrap().iter() {
-                        let stack_service_name = service_name.as_str().unwrap();
-                        let stack_name = self.config.stack_name.clone();
-                        let service_value = service_value.clone();
-                        let service_node = self
-                            .resolve_node(
-                                stack_name.as_str(),
-                                "service",
-                                stack_service_name,
-                                service_value,
-                            )
-                            .unwrap();
+                    value.as_mapping().and_then(|mapping| {
+                        for (service_name, service_value) in mapping.iter() {
+                            let stack_service_name = service_name.as_str().unwrap();
+                            let stack_name = self.config.stack_name.clone();
+                            let service_value = service_value.clone();
+                            let service_node = self
+                                .resolve_node(
+                                    stack_name.as_str(),
+                                    "service",
+                                    stack_service_name,
+                                    service_value,
+                                )
+                                .unwrap();
 
-                        graph.add_service(&service_node);
-                        graph.add_all_incoming_edges_downstream(stack_name.clone(), &service_node);
-                    }
+                            graph.add_service(&service_node);
+                            graph.add_all_incoming_edges_downstream(stack_name.clone(), &service_node);
+                        }
+
+                        Some(())
+                    });
                 }
                 "projects" => {
-                    for (project_name, project_value) in value.as_mapping().unwrap().iter() {
-                        let project_name = project_name.as_str().unwrap();
-                        let stack_name = self.config.stack_name.clone();
-                        let project_value = project_value.clone();
-                        let project_node = self
-                            .resolve_node(
-                                stack_name.as_str(),
-                                "project",
-                                project_name,
-                                project_value,
-                            )
-                            .expect("Failed to resolve project node.");
-                        graph.add_project(&project_node);
-                        graph.add_all_incoming_edges_downstream(stack_name.clone(), &project_node);
-                    }
+                    value.as_mapping().and_then(|mapping| {
+                        for (project_name, project_value) in mapping.iter() {
+                            let project_name = project_name.as_str().unwrap();
+                            let stack_name = self.config.stack_name.clone();
+                            let project_value = project_value.clone();
+                            let project_node = self
+                                .resolve_node(
+                                    stack_name.as_str(),
+                                    "project",
+                                    project_name,
+                                    project_value,
+                                )
+                                .expect("Failed to resolve project node.");
+                            graph.add_project(&project_node);
+                            graph.add_all_incoming_edges_downstream(stack_name.clone(), &project_node);
+                        }
+
+                        Some(())
+                    });
                 }
                 // TODO(Ian): Revist nested stacks after MVP is done.
                 // "stacks" => {
@@ -619,7 +627,7 @@ impl Resolver {
                 //         graph.add_all_incoming_edges_downstream(global_stack_name.clone(), &stack_node);
                 //     }
                 // }
-                _ => {}
+                _ => { () }
             }
         }
     }
