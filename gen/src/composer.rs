@@ -1,6 +1,8 @@
 use crate::artifacts::{ArtifactNodeRepr, ArtifactRepr};
-use crate::utils::{torb_path, buildstate_path_or_create};
-use hcl::{Block, Body, Expression, RawExpression, Object, ObjectKey};
+use crate::resolver::inputs::{InputResolver, NO_INPUTS_FN, NO_VALUES_FN};
+use crate::utils::{buildstate_path_or_create, torb_path};
+
+use hcl::{Block, Body, Expression, Object, ObjectKey, RawExpression};
 use memorable_wordlist;
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -8,13 +10,10 @@ use std::path::Path;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
-pub enum TorbComposerErrors {
-}
+pub enum TorbComposerErrors {}
 
 fn reserved_outputs() -> HashMap<&'static str, &'static str> {
-    let reserved = vec![
-        ("host", ""),
-    ];
+    let reserved = vec![("host", "")];
 
     let mut reserved_hash = HashMap::new();
 
@@ -34,12 +33,12 @@ fn snake_case_to_kebab(input: &str) -> String {
 }
 
 #[derive(Debug, Clone)]
-struct InputAddress {
-    locality: String,
-    node_type: String,
-    node_name: String,
-    node_property: String,
-    property_specifier: String,
+pub struct InputAddress {
+    pub locality: String,
+    pub node_type: String,
+    pub node_name: String,
+    pub node_property: String,
+    pub property_specifier: String,
 }
 
 impl InputAddress {
@@ -115,69 +114,29 @@ impl<'a> Composer<'a> {
             "{}.{}.{}",
             stack_name, &torb_input_address.node_type, &torb_input_address.node_name
         );
-        println!("output_node_fqn: {}", output_node_fqn);
-        println!("{:?}", self.artifact_repr.nodes);
-        self
-            .artifact_repr
+
+        self.artifact_repr
             .nodes
             .get(&output_node_fqn)
             .expect("Unable to map input address to node, make sure your mapping is correct.")
     }
 
-    fn interpolate_inputs_into_helm_values(&self, value: &serde_yaml::Value) -> serde_yaml::Value {
-        match value {
-            serde_yaml::Value::String(s) => {
-                if s.starts_with("self.") {
-                    let torb_input_address = InputAddress::try_from(s.as_str());
-                    let output_value = self.input_values_from_input_address(torb_input_address.clone());
-                    let mut string_value = hcl::format::to_string(&output_value).unwrap(); 
+    fn interpolate_inputs_into_helm_values(
+        &self,
+        torb_input_address: Result<InputAddress, String>,
+    ) -> String {
+        let output_value = self.input_values_from_input_address(torb_input_address.clone());
+        let string_value = hcl::format::to_string(&output_value).unwrap();
 
-                    string_value = match torb_input_address {
-                        Ok(input_address) => {
-                            if reserved_outputs().contains_key(input_address.property_specifier.as_str()) {
-                                string_value.replace("\"", "")
-                            } else {
-                                format!("${{{}}}", string_value.replace("\"", ""))
-                            }
-                        },
-                        Err(s) => {
-                            s
-                        }
-                    };
-                    println!("string_value: {:?}", string_value);
-                    println!("string_value: {:?}", string_value);
-                    println!("string_value: {:?}", string_value);
-                    println!("string_value: {:?}", string_value);
-                    
-
-                    serde_yaml::Value::String(string_value)
+        match torb_input_address {
+            Ok(input_address) => {
+                if reserved_outputs().contains_key(input_address.property_specifier.as_str()) {
+                    string_value.replace("\"", "")
                 } else {
-                    serde_yaml::Value::String(s.to_string())
+                    format!("${{{}}}", string_value.replace("\"", ""))
                 }
             }
-            serde_yaml::Value::Mapping(m) => {
-                let mut new_mapping = serde_yaml::Mapping::new();
-                for (k, v) in m {
-                    new_mapping.insert(k.clone(), self.interpolate_inputs_into_helm_values(v));
-                }
-
-                serde_yaml::Value::Mapping(new_mapping)
-            }
-            serde_yaml::Value::Sequence(s) => {
-                let mut new_seq = serde_yaml::Sequence::new();
-                for v in s {
-                    new_seq.push(self.interpolate_inputs_into_helm_values(v).to_owned());
-                }
-
-                serde_yaml::Value::Sequence(new_seq)
-            }
-            serde_yaml::Value::Number(n) => {
-                serde_yaml::Value::Number(n.to_owned())
-            }
-            serde_yaml::Value::Bool(b) => {
-                serde_yaml::Value::Bool(b.to_owned())
-            }
-            _ => serde_yaml::Value::Null,
+            Err(s) => s,
         }
     }
 
@@ -190,11 +149,11 @@ impl<'a> Composer<'a> {
                 let namespace = snake_case_to_kebab(&self.artifact_repr.stack_name);
 
                 Expression::String(format!("{}.{}.svc.cluster.local", name, namespace))
-            },
+            }
             _ => {
                 panic!("Unable to map reserved value.")
             }
-        }        
+        }
     }
 
     fn k8s_status_values_path_from_torb_input(&self, torb_input_address: InputAddress) -> String {
@@ -208,15 +167,17 @@ impl<'a> Composer<'a> {
 
             kube_val
         } else {
-            panic!("Unable to map node_property to output attribute please check your inputs, ex: 'a.b.output.c or a.b.input.c");
+            panic!("Unable to map node property to output attribute please check your inputs, ex: 'a.b.output.c or a.b.input.c");
         };
 
         let formatted_name = kebab_to_snake_case(&self.release_name);
         let block_name = format!("{}_{}", formatted_name, &output_node.name);
 
-        format!("jsondecode(data.torb_helm_release.{}.values)[\"{}\"]", block_name, kube_value)
+        format!(
+            "jsondecode(data.torb_helm_release.{}.values)[\"{}\"]",
+            block_name, kube_value
+        )
     }
-
 
     pub fn compose(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         println!("Composing build environment...");
@@ -303,7 +264,7 @@ impl<'a> Composer<'a> {
     }
 
     fn walk_artifact(&mut self, node: &ArtifactNodeRepr) -> Result<(), Box<dyn std::error::Error>> {
-        // We want to walk to the end of the dependencies before we build. 
+        // We want to walk to the end of the dependencies before we build.
         // This is because duplicate dependencies can exist, and we want to avoid building the same thing twice.
         // By walking to the end we ensure that whichever copy is built first will be in the set of seen nodes.
         // This let me avoid worrying about how to handle duplicate dependencies in the dependency tree data structure.
@@ -360,9 +321,15 @@ impl<'a> Composer<'a> {
         let data_block = Block::builder("data")
             .add_label("torb_helm_release")
             .add_label(format!("{}_{}", &snake_case_release_name, &node.name))
-            .add_attribute(("release_name", format!("{}-{}", self.release_name.clone(), node.name)))
+            .add_attribute((
+                "release_name",
+                format!("{}-{}", self.release_name.clone(), node.name),
+            ))
             .add_attribute(("namespace", namespace))
-            .add_attribute(("depends_on", Expression::from(vec![RawExpression::from(format!("module.{}", name))])))
+            .add_attribute((
+                "depends_on",
+                Expression::from(vec![RawExpression::from(format!("module.{}", name))]),
+            ))
             .build();
 
         Ok(data_block)
@@ -405,53 +372,67 @@ impl<'a> Composer<'a> {
     fn create_input_values(&self, node: &ArtifactNodeRepr) -> Vec<Object<ObjectKey, Expression>> {
         let mut input_vals = Vec::<Object<ObjectKey, Expression>>::new();
 
-        for (_, (spec, value)) in node.mapped_inputs.iter() {
-            let input_address_result = InputAddress::try_from(value.clone().as_str());
-            
+        let resolver_fn = |spec: &String, input_address_result| {
             let mut input: Object<ObjectKey, Expression> = Object::new();
 
-            input.insert(ObjectKey::Expression(Expression::String("name".to_string())), Expression::String(spec.clone()));
-            input.insert(ObjectKey::Expression(Expression::String("value".to_string())), self.input_values_from_input_address(input_address_result));
+            input.insert(
+                ObjectKey::Expression(Expression::String("name".to_string())),
+                Expression::String(spec.clone()),
+            );
+
+            let mapped_expression = self.input_values_from_input_address(input_address_result);
+
+            input.insert(
+                ObjectKey::Expression(Expression::String("value".to_string())),
+                mapped_expression.clone(),
+            );
 
             input_vals.push(input);
-        }
+
+            mapped_expression.clone().to_string()
+        };
+
+        let (_, _) = InputResolver::resolve(node, NO_VALUES_FN, Some(resolver_fn))
+            .expect("Unable to resolve listed inputs.");
 
         input_vals
     }
 
-    fn input_values_from_input_address(&self, input_address: Result<InputAddress, String>) -> Expression {
+    fn input_values_from_input_address(
+        &self,
+        input_address: Result<InputAddress, String>,
+    ) -> Expression {
         match input_address {
             Ok(input_address) => {
                 if reserved_outputs().contains_key(input_address.property_specifier.as_str()) {
                     let val = self.k8s_value_from_reserved_input(input_address);
                     val.clone()
-
                 } else {
                     let val = self.k8s_status_values_path_from_torb_input(input_address);
 
                     Expression::Raw(RawExpression::new(val.clone()))
                 }
-            },
-            Err(input_result) => {
-                Expression::String(input_result)
-            },
+            }
+            Err(input_result) => Expression::String(input_result),
         }
     }
 
     fn add_required_providers_to_main_struct(&mut self) {
         let required_providers = Block::builder("terraform")
-            .add_block(Block::builder("required_providers")
-                .add_attribute(("torb", Expression::from_iter(
-                    vec![
-                        ("source", "TorbFoundry/torb"),
-                        ("version", "0.1.1")
-                    ]
-                )))
-                .build()).build();
-
-        let torb_provider = Block::builder("provider")
-            .add_label("torb")
+            .add_block(
+                Block::builder("required_providers")
+                    .add_attribute((
+                        "torb",
+                        Expression::from_iter(vec![
+                            ("source", "TorbFoundry/torb"),
+                            ("version", "0.1.1"),
+                        ]),
+                    ))
+                    .build(),
+            )
             .build();
+
+        let torb_provider = Block::builder("provider").add_label("torb").build();
 
         let mut builder = std::mem::take(&mut self.main_struct);
 
@@ -467,7 +448,7 @@ impl<'a> Composer<'a> {
     ) -> Result<(), Box<dyn std::error::Error>> {
         let source = format!("./{}_module", node.name);
         let name = node.fqn.clone().replace(".", "_");
-        let namespace = node
+        let mut namespace = node
             .fqn
             .split(".")
             .next()
@@ -475,10 +456,21 @@ impl<'a> Composer<'a> {
             .to_string()
             .replace("_", "-");
 
+        if self.artifact_repr.namespace.is_some() {
+            namespace = self.artifact_repr.namespace.clone().unwrap();
+        }
+
+        if node.namespace.is_some() {
+            namespace = node.namespace.clone().unwrap();
+        }
+
         let mut values = vec![];
         let mut attributes = vec![
             ("source", source),
-            ("release_name", format!("{}-{}", self.release_name.clone(), node.name)),
+            (
+                "release_name",
+                format!("{}-{}", self.release_name.clone(), node.name),
+            ),
             ("namespace", namespace),
         ];
 
@@ -492,7 +484,7 @@ impl<'a> Composer<'a> {
             } else {
                 image_key_map.insert("tag".to_string(), "latest".to_string());
             }
-            
+
             if build_step.registry != "local" {
                 image_key_map.insert("repository".to_string(), build_step.registry);
             } else {
@@ -509,19 +501,15 @@ impl<'a> Composer<'a> {
                 "repository",
                 node.deploy_steps["helm"].clone().unwrap()["repository"].clone(),
             ));
-            attributes.push(
-            (
+            attributes.push((
                 "chart_name",
                 node.deploy_steps["helm"].clone().unwrap()["chart"].clone(),
             ));
         } else {
             // If repository is not specified, we assume that the chart is local.
-            let local_path = torb_path().join(node.deploy_steps["helm"].clone().unwrap()["chart"].clone());
-            attributes.push(
-            (
-                "chart_name",
-                local_path.to_str().unwrap().to_string(),
-            ));
+            let local_path =
+                torb_path().join(node.deploy_steps["helm"].clone().unwrap()["chart"].clone());
+            attributes.push(("chart_name", local_path.to_str().unwrap().to_string()));
         }
 
         let module_version = node.deploy_steps["helm"]
@@ -538,14 +526,16 @@ impl<'a> Composer<'a> {
         let output_block = self.create_output_data_block(node)?;
 
         let inputs = self.create_input_values(node);
-        let yaml_str = node.values.as_str();
-        let serde_value: serde_yaml::Value = serde_yaml::from_str(yaml_str).unwrap_or(serde_yaml::Value::Null);
 
-        let mapped_values = self.interpolate_inputs_into_helm_values(&serde_value);
+        let resolver_fn = &mut |address: Result<InputAddress, String>| -> String {
+            self.interpolate_inputs_into_helm_values(address)
+        };
 
-        let yaml_string = serde_yaml::to_string(&mapped_values).expect("Unable to convert values config to yaml.");
+        let (mapped_values, _) = InputResolver::resolve(node, Some(resolver_fn), NO_INPUTS_FN)?;
 
-        values.push(yaml_string);
+        // println!("{:?}", mapped_values);
+
+        values.push(mapped_values.expect("Unable to resolve values field."));
 
         let mut builder = std::mem::take(&mut self.main_struct);
 

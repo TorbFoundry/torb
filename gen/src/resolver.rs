@@ -1,3 +1,5 @@
+pub mod inputs;
+
 use crate::artifacts::{ArtifactNodeRepr, BuildStep};
 use crate::utils::{normalize_name, torb_path};
 use indexmap::IndexMap;
@@ -8,17 +10,17 @@ use std::process::Command;
 use std::{error::Error, path::PathBuf};
 use thiserror::Error;
 
-const VERSION: &'static str = env!("CARGO_PKG_VERSION");
+// const VERSION: &'static str = env!("CARGO_PKG_VERSION");
 pub fn resolve_stack(stack_yaml: &String) -> Result<StackGraph, Box<dyn std::error::Error>> {
     let stack_def_yaml: serde_yaml::Value = serde_yaml::from_str(stack_yaml).unwrap();
     let stack_name = stack_def_yaml.get("name").unwrap().as_str().unwrap();
-    let stack_description = stack_def_yaml.get("description").unwrap().as_str().unwrap();
+    // let stack_description = stack_def_yaml.get("description").unwrap().as_str().unwrap();
     let resolver_conf = ResolverConfig::new(
-        false,
+        // false,
         normalize_name(stack_name),
-        stack_description.to_string(),
+        // stack_description.to_string(),
         stack_def_yaml.clone(),
-        VERSION.to_string(),
+        // VERSION.to_string(),
     );
 
     let resolver = Resolver::new(&resolver_conf);
@@ -36,27 +38,27 @@ pub enum TorbResolverErrors {
 
 #[derive(Clone)]
 pub struct ResolverConfig {
-    autoaccept: bool,
+    // autoaccept: bool,
     stack_name: String,
-    stack_description: String,
+    // stack_description: String,
     stack_contents: serde_yaml::Value,
-    torb_version: String,
+    // torb_version: String,
 }
 
 impl ResolverConfig {
     pub fn new(
-        autoaccept: bool,
+        // autoaccept: bool,
         stack_name: String,
-        stack_description: String,
+        // stack_description: String,
         stack_contents: serde_yaml::Value,
-        torb_version: String,
+        // torb_version: String,
     ) -> ResolverConfig {
         ResolverConfig {
-            autoaccept,
+            // autoaccept,
             stack_name,
-            stack_description,
+            // stack_description,
             stack_contents,
-            torb_version,
+            // torb_version,
         }
     }
 }
@@ -69,24 +71,17 @@ impl ResolverConfig {
 //     tool_config: IndexMap<String, String>,
 // }
 
-#[derive(Clone, Debug)]
-pub struct StackConfig {
-    pub meta: String,
-    pub ingress: bool,
-}
-
 #[derive(Serialize, Deserialize, Default, Clone, Debug)]
-pub struct DependencyNodeDependencies {
+pub struct NodeDependencies {
     pub services: Option<Vec<String>>,
     pub projects: Option<Vec<String>>,
     pub stacks: Option<Vec<String>>,
 }
 
-impl DependencyNodeDependencies {}
+impl NodeDependencies {}
 
 #[derive(Clone, Debug)]
 pub struct StackGraph {
-    pub stack_config: StackConfig,
     pub services: HashMap<String, ArtifactNodeRepr>,
     pub projects: HashMap<String, ArtifactNodeRepr>,
     pub stacks: HashMap<String, ArtifactNodeRepr>,
@@ -98,11 +93,11 @@ pub struct StackGraph {
     pub helm_version: String,
     pub meta: Box<Option<ArtifactNodeRepr>>,
     pub incoming_edges: HashMap<String, Vec<String>>,
+    pub namespace: Option<String>
 }
 
 impl StackGraph {
     pub fn new(
-        stack_config: StackConfig,
         name: String,
         kind: String,
         version: String,
@@ -110,12 +105,12 @@ impl StackGraph {
         tf_version: String,
         helm_version: String,
         meta: Box<Option<ArtifactNodeRepr>>,
+        namespace: Option<String>
     ) -> StackGraph {
         StackGraph {
             services: HashMap::<String, ArtifactNodeRepr>::new(),
             projects: HashMap::<String, ArtifactNodeRepr>::new(),
             stacks: HashMap::<String, ArtifactNodeRepr>::new(),
-            stack_config,
             name,
             version,
             kind,
@@ -124,6 +119,7 @@ impl StackGraph {
             commit,
             meta,
             incoming_edges: HashMap::<String, Vec<String>>::new(),
+            namespace
         }
     }
 
@@ -251,15 +247,11 @@ impl Resolver {
 
         let version = yaml["version"].as_str().unwrap().to_string();
         let kind = yaml["kind"].as_str().unwrap().to_string();
-        let ingress = yaml["config"]["ingress"].as_bool().unwrap_or(false);
         let tf_version = self.get_tf_version();
         let helm_version = self.get_helm_version();
         let git_sha = self.get_commit_sha();
+        let namespace = yaml["namespace"].as_str().map(|ns| { ns.to_string() });
         let mut graph = StackGraph::new(
-            StackConfig {
-                meta: meta_file.to_string(),
-                ingress: ingress,
-            },
             name,
             kind,
             version,
@@ -267,6 +259,7 @@ impl Resolver {
             helm_version,
             git_sha,
             meta,
+            namespace
         );
 
         self.walk_yaml(&mut graph, &yaml);
@@ -331,6 +324,7 @@ impl Resolver {
         node.file_path = node_fp;
         node.values = serde_yaml::to_string(&values).expect("Unable to convert values yaml to string.");
         node.validate_map_and_set_inputs(inputs);
+        node.discover_and_set_implicit_dependencies(&stack_name.to_string())?;
 
         Ok(node)
     }
@@ -412,6 +406,7 @@ impl Resolver {
         node.file_path = node_fp;
         node.validate_map_and_set_inputs(inputs);
         node.values = serde_yaml::to_string(&values).expect("Unable to convert values yaml to string.");
+        node.discover_and_set_implicit_dependencies(&stack_name.to_string())?;
 
         Ok(node)
     }
@@ -447,6 +442,7 @@ impl Resolver {
             Some(graph),
             Some(Vec::new()),
             "".to_string(),
+            None
         );
 
         Ok(node)
@@ -551,7 +547,7 @@ impl Resolver {
         match dep_values {
             Some(deps) => {
                 let yaml_str = serde_yaml::to_string(deps)?;
-                let deps: DependencyNodeDependencies =
+                let deps: NodeDependencies =
                     serde_yaml::from_str(yaml_str.as_str()).unwrap();
                 node.dependency_names = deps;
 

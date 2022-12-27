@@ -1,10 +1,14 @@
-use crate::resolver::{DependencyNodeDependencies, StackGraph, resolve_stack};
+use crate::resolver::inputs::InputResolver;
+use crate::resolver::{NodeDependencies, StackGraph, resolve_stack};
 use crate::utils::{checksum, buildstate_path_or_create};
+use crate::composer::{InputAddress};
+
 use data_encoding::BASE32;
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use serde_yaml::{self};
 use sha2::{Digest, Sha256};
+use std::collections::HashSet;
 use std::fs;
 use std::io::Write;
 use thiserror::Error;
@@ -55,8 +59,10 @@ pub struct ArtifactNodeRepr {
     pub outputs: Vec<String>,
     #[serde(default = "Vec::new")]
     pub dependencies: Vec<ArtifactNodeRepr>,
+    #[serde(default = "HashSet::new")]
+    pub implicit_dependency_names: HashSet<String>,
     #[serde(skip)]
-    pub dependency_names: DependencyNodeDependencies,
+    pub dependency_names: NodeDependencies,
     #[serde(default = "String::new")]
     pub file_path: String,
     #[serde(skip)]
@@ -64,6 +70,7 @@ pub struct ArtifactNodeRepr {
     pub files: Option<Vec<String>>,
     #[serde(default = "String::new")]
     pub values: String,
+    pub namespace: Option<String>,
 }
 
 impl ArtifactNodeRepr {
@@ -83,6 +90,7 @@ impl ArtifactNodeRepr {
         stack_graph: Option<StackGraph>,
         files: Option<Vec<String>>,
         values: String,
+        namespace: Option<String>,
     ) -> ArtifactNodeRepr {
         ArtifactNodeRepr {
             fqn: fqn,
@@ -96,8 +104,9 @@ impl ArtifactNodeRepr {
             mapped_inputs: inputs,
             input_spec: input_spec,
             outputs: outputs,
+            implicit_dependency_names: HashSet::new(),
             dependencies: Vec::new(),
-            dependency_names: DependencyNodeDependencies {
+            dependency_names: NodeDependencies {
                 services: None,
                 projects: None,
                 stacks: None,
@@ -105,8 +114,58 @@ impl ArtifactNodeRepr {
             file_path,
             stack_graph,
             files,
-            values
+            values,
+            namespace
         }
+    }
+
+    fn address_to_fqn(graph_name: &String, addr_result: Result<InputAddress, String>) -> Option<String> {
+        match addr_result {
+            Ok(addr) => {
+                let fqn = format!("{}.{}.{}", graph_name, addr.node_type.clone(), addr.node_name.clone());
+
+                Some(fqn)
+            },
+            Err(_s) => {
+                None
+            }
+        }
+    }
+
+    pub fn discover_and_set_implicit_dependencies(&mut self, graph_name: &String) -> Result<(), Box<dyn std::error::Error>> {
+        let mut implicit_deps_inputs = HashSet::new();
+
+        let inputs_fn = |_spec: &String, val: Result<InputAddress, String>| -> String {
+            let fqn_option = ArtifactNodeRepr::address_to_fqn(graph_name, val);
+
+            if fqn_option.is_some() {
+                let fqn = fqn_option.unwrap();
+                implicit_deps_inputs.insert(fqn);
+            };
+
+            "".to_string()
+        };
+
+        let mut implicit_deps_values = HashSet::new();
+
+        let values_fn = |addr: Result<InputAddress, String>| -> String {
+            let fqn_option = ArtifactNodeRepr::address_to_fqn(graph_name, addr);
+
+            if fqn_option.is_some() {
+                let fqn = fqn_option.unwrap();
+                implicit_deps_values.insert(fqn);
+            };
+
+            "".to_string()
+        };
+
+        let (_, _) = InputResolver::resolve(&self, Some(values_fn), Some(inputs_fn))?;
+
+        let unioned_deps = implicit_deps_inputs.union(&mut implicit_deps_values);
+
+        self.implicit_dependency_names = unioned_deps.cloned().collect();
+
+        Ok(())
     }
 
     pub fn validate_map_and_set_inputs(&mut self, inputs: IndexMap<String, String>) {
@@ -175,7 +234,7 @@ pub struct ArtifactRepr {
     pub terraform_version: String,
     pub git_commit: String,
     pub stack_name: String,
-    pub ingress: bool,
+    pub namespace: Option<String>,
     pub meta: Box<Option<ArtifactRepr>>,
     pub deploys: Vec<ArtifactNodeRepr>,
     pub nodes: IndexMap<String, ArtifactNodeRepr>
@@ -188,8 +247,8 @@ impl ArtifactRepr {
         terraform_version: String,
         git_commit: String,
         stack_name: String,
-        ingress: bool,
         meta: Box<Option<ArtifactRepr>>,
+        namespace: Option<String>
     ) -> ArtifactRepr {
         ArtifactRepr {
             torb_version,
@@ -197,10 +256,10 @@ impl ArtifactRepr {
             terraform_version,
             git_commit,
             stack_name,
-            ingress,
             meta,
             deploys: Vec::new(),
-            nodes: IndexMap::new()
+            nodes: IndexMap::new(),
+            namespace: namespace
         }
     }
 }
@@ -236,8 +295,8 @@ fn walk_graph(graph: &StackGraph) -> Result<ArtifactRepr, Box<dyn std::error::Er
         graph.tf_version.clone(),
         graph.commit.clone(),
         graph.name.clone(),
-        graph.stack_config.ingress,
         meta,
+        graph.namespace.clone()
     );
 
     let mut node_map: IndexMap<String, ArtifactNodeRepr> = IndexMap::new();
@@ -265,23 +324,44 @@ pub fn stack_into_artifact(meta: &Box<Option<ArtifactNodeRepr>>) -> Result<Box<O
 
 fn walk_nodes(node: &ArtifactNodeRepr, graph: &StackGraph, node_map: &mut IndexMap<String, ArtifactNodeRepr>) -> ArtifactNodeRepr {
     let mut new_node = node.clone();
+
+    for fqn in new_node.implicit_dependency_names.iter() {
+        let kind = fqn.split(".").collect::<Vec<&str>>()[1];
+        let node = match kind {
+            "project" => graph.projects.get(fqn).unwrap(),
+            "service" => graph.services.get(fqn).unwrap(),
+            "stack" => graph.stacks.get(fqn).unwrap(),
+            _ => panic!("Build artifact generation, unknown kind: {}", kind),
+        };
+
+        let node_repr = walk_nodes(node, graph, node_map);
+
+        new_node.dependencies.push(node_repr)
+    }
+
     new_node.dependency_names.projects.as_ref().map_or((), |projects| {
         for project in projects {
             let p_fqn = format!("{}.project.{}", graph.name.clone(), project.clone());
-            let p_node = graph.projects.get(&p_fqn).unwrap();
-            let p_node_repr = walk_nodes(p_node, graph, node_map);
 
-            new_node.dependencies.push(p_node_repr);
+            if !new_node.implicit_dependency_names.contains(&p_fqn) {
+                let p_node = graph.projects.get(&p_fqn).unwrap();
+                let p_node_repr = walk_nodes(p_node, graph, node_map);
+
+                new_node.dependencies.push(p_node_repr);
+            }
         }
     });
 
     new_node.dependency_names.services.as_ref().map_or((), |services| {
         for service in services {
             let s_fqn = format!("{}.service.{}", graph.name.clone(), service.clone());
-            let s_node = graph.services.get(&s_fqn).unwrap();
-            let s_node_repr = walk_nodes(s_node, graph, node_map);
 
-            new_node.dependencies.push(s_node_repr);
+            if !new_node.implicit_dependency_names.contains(&s_fqn) {
+                let s_node = graph.services.get(&s_fqn).unwrap();
+                let s_node_repr = walk_nodes(s_node, graph, node_map);
+
+                new_node.dependencies.push(s_node_repr);
+            }
         }
     });
 

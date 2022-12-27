@@ -70,11 +70,7 @@ impl<'a> StackBuilder<'a> {
     ) -> Result<Vec<Output>, TorbBuilderErrors> {
         let current_dir = std::env::current_dir().unwrap();
         let dockerfile_dir = current_dir.join(name);
-        println!("Dockerfile dir: {:?}", dockerfile_dir);
-        println!("Dockerfile dir: {:?}", dockerfile_dir);
-        println!("Dockerfile dir: {:?}", dockerfile_dir);
-        println!("Dockerfile dir: {:?}", dockerfile_dir);
-        println!("Dockerfile dir: {:?}", dockerfile_dir);
+
         let label = if registry != "local" {
             format!("{}:{}", registry, tag)
         } else {

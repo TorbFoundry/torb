@@ -1,5 +1,4 @@
 use crate::artifacts::{ArtifactRepr};
-use std::collections::{HashSet};
 use std::process::Command;
 use thiserror::Error;
 use crate::utils::{torb_path, buildstate_path_or_create};
@@ -14,13 +13,11 @@ pub enum TorbDeployerErrors {
 }
 
 pub struct StackDeployer {
-    built: HashSet<String>,
 }
 
 impl StackDeployer {
     pub fn new() -> StackDeployer {
         StackDeployer {
-            built: HashSet::new(),
         }
     }
 
@@ -43,18 +40,6 @@ impl StackDeployer {
         let out = self.deploy_tf(dryrun).expect("Failed to plan and deploy terraform.");
         println!("{}", std::str::from_utf8(&out.stdout).unwrap());
         println!("{}", std::str::from_utf8(&out.stderr).unwrap());
-
-        Ok(())
-    }
-
-    fn deploy_meta(
-        &mut self,
-        meta_stack: &Box<Option<ArtifactRepr>>,
-        dryrun: bool,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        if let Some(meta) = meta_stack.as_ref() {
-            self.deploy(meta, dryrun)?;
-        }
 
         Ok(())
     }
