@@ -281,6 +281,7 @@ fn get_start_nodes(graph: &StackGraph) -> Vec<&ArtifactNodeRepr> {
         }
     }
 
+    start_nodes.sort_by(|a, b| b.fqn.cmp(&a.fqn));
     start_nodes
 }
 
