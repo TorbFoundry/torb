@@ -29,7 +29,7 @@ jobs:
           cross build --release --target ${{matrix.TARGET}}
       - name: Zip Artifact
         run: |
-          zip cli/target/${{matrix.TARGET}}/release/torb_${{github.ref_name}}_${{matrix.TARGET}} cli/target/${{matrix.TARGET}}/release/torb
+          zip target/${{matrix.TARGET}}/release/torb_${{github.ref_name}}_${{matrix.TARGET}} target/${{matrix.TARGET}}/release/torb
       - name: Archive Release Artifact
         uses: actions/upload-artifact@v3
         with:
@@ -55,7 +55,7 @@ jobs:
           cargo build --release --target ${{matrix.TARGET}}
       - name: Zip Artifact
         run: |
-          zip cli/target/${{matrix.TARGET}}/release/torb_${{github.ref_name}}_${{matrix.TARGET}} cli/target/${{matrix.TARGET}}/release/torb
+          zip target/${{matrix.TARGET}}/release/torb_${{github.ref_name}}_${{matrix.TARGET}} target/${{matrix.TARGET}}/release/torb
       - name: Archive Release Artifact
         uses: actions/upload-artifact@v3
         with:
