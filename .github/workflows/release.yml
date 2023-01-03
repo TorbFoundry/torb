@@ -75,4 +75,4 @@ jobs:
           discussionCategory: Releases
           discussionReactions: +1,laugh,hooray,heart,rocket,eyes
           assets: |
-            - path: torb/build/releases/torb_${{github.ref_name}}_*
+            - path: build/releases/torb_${{github.ref_name}}_*
