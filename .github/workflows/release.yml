@@ -5,7 +5,7 @@ concurrency:
 on:
   push:
     tags:
-      - "v\d{1,4}\.\d{1,4}\.\d{1,4}-\d{2}\.\d{2}$"
+      - !ruby/regexp "v\d{1,4}\.\d{1,4}\.\d{1,4}-\d{2}\.\d{2}$"
 jobs:
   build_nomac:
     strategy:
