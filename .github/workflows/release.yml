@@ -1,0 +1,78 @@
+name: Publish Torb CLI Release
+concurrency:
+  group: tagged-release
+  cancel-in-progress: true
+on:
+  push:
+    tags:
+      - "v\d{1,4}\.\d{1,4}\.\d{1,4}-\d{2}\.\d{2}$"
+jobs:
+  build_nomac:
+    strategy:
+       matrix:
+        include:
+          - TARGET: aarch64-unknown-linux-gnu
+            OS: ubuntu-latest
+          - TARGET: x86_64-unknown-linux-gnu
+            OS: ubuntu-latest
+    name: Build Release Non Mac
+    defaults:
+      run:
+        working-directory: ./cli
+    runs-on: ${{matrix.OS}}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+      - name: Build
+        run: |
+          cargo install -f cross
+          cross build --release --target ${{matrix.TARGET}}
+      - name: Archive release artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: torb_${{github.ref_name}}_${{matrix.TARGET}}
+          path: cli/release/torb
+
+  build_mac:
+    strategy:
+       matrix:
+        include:
+          - TARGET: x86_64-apple-darwin
+            OS: macos-12
+    name: Build Release Mac
+    defaults:
+      run:
+        working-directory: ./cli
+    runs-on: ${{matrix.OS}}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+      - name: Build
+        run: |
+          cargo build --release --target ${{matrix.TARGET}}
+      - name: Archive release artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: torb_${{github.ref_name}}_${{matrix.TARGET}}
+          path: cli/release/torb
+
+  publish:
+    runs-on: ubuntu-latest
+    name: Publish Release
+    needs: build
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+      - name: Download Build Artifacts
+        uses: actions/download-artifact@v3
+        with:
+          path: build/releases
+      - name: Publish release
+        uses: eloquent/github-release-action@v3
+        with:
+          generateReleaseNotes: "true"
+          reactions: +1,hooray,heart,rocket,eyes
+          discussionCategory: Releases
+          discussionReactions: +1,laugh,hooray,heart,rocket,eyes
+          assets: |
+            - path: build/releases/**/torb_${{github.ref_name}}_*
