@@ -31,7 +31,7 @@ jobs:
         uses: actions/upload-artifact@v3
         with:
           name: torb_${{github.ref_name}}_${{matrix.TARGET}}
-          path: cli/release/torb
+          path: cli/target/${{matrix.TARGET}}/release/torb
 
   build_mac:
     strategy:
@@ -54,7 +54,7 @@ jobs:
         uses: actions/upload-artifact@v3
         with:
           name: torb_${{github.ref_name}}_${{matrix.TARGET}}
-          path: cli/release/torb
+          path: cli/target/${{matrix.TARGET}}/release/torb
 
   publish:
     runs-on: ubuntu-latest
