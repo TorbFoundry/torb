@@ -27,11 +27,14 @@ jobs:
         run: |
           cargo install -f cross
           cross build --release --target ${{matrix.TARGET}}
-      - name: Archive release artifacts
+      - name: Zip Artifact
+        run: |
+          zip cli/target/${{matrix.TARGET}}/release/torb_${{github.ref_name}}_${{matrix.TARGET}} cli/target/${{matrix.TARGET}}/release/torb
+      - name: Archive Release Artifact
         uses: actions/upload-artifact@v3
         with:
           name: torb_${{github.ref_name}}_${{matrix.TARGET}}
-          path: cli/target/${{matrix.TARGET}}/release/torb
+          path: cli/target/${{matrix.TARGET}}/release/torb_${{github.ref_name}}_${{matrix.TARGET}}
 
   build_mac:
     strategy:
@@ -50,11 +53,14 @@ jobs:
       - name: Build
         run: |
           cargo build --release --target ${{matrix.TARGET}}
-      - name: Archive release artifacts
+      - name: Zip Artifact
+        run: |
+          zip cli/target/${{matrix.TARGET}}/release/torb_${{github.ref_name}}_${{matrix.TARGET}} cli/target/${{matrix.TARGET}}/release/torb
+      - name: Archive Release Artifact
         uses: actions/upload-artifact@v3
         with:
           name: torb_${{github.ref_name}}_${{matrix.TARGET}}
-          path: cli/target/${{matrix.TARGET}}/release/torb
+          path: cli/target/${{matrix.TARGET}}/release/torb_${{github.ref_name}}_${{matrix.TARGET}}
 
   publish:
     runs-on: ubuntu-latest
