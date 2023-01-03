@@ -59,7 +59,7 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     name: Publish Release
-    needs: build
+    needs: build_nomac,build_mac
     steps:
       - name: Checkout
         uses: actions/checkout@v3
