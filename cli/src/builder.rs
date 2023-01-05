@@ -71,8 +71,8 @@ impl<'a> StackBuilder<'a> {
         let current_dir = std::env::current_dir().unwrap();
         let dockerfile_dir = current_dir.join(name);
 
-        let label = if registry != "local" {
-            format!("{}:{}", registry, tag)
+        let label = if registry != "local" && registry != "" {
+            format!("{}/{}:{}", registry, name, tag)
         } else {
             format!("{}:{}", name, tag)
         };
