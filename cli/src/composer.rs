@@ -146,7 +146,8 @@ impl<'a> Composer<'a> {
         match torb_input_address.property_specifier.as_str() {
             "host" => {
                 let name = format!("{}-{}", self.release_name, output_node.name);
-                let namespace = snake_case_to_kebab(&self.artifact_repr.stack_name);
+
+                let namespace = self.artifact_repr.namespace(output_node);
 
                 Expression::String(format!("{}.{}.svc.cluster.local", name, namespace))
             }
@@ -309,13 +310,8 @@ impl<'a> Composer<'a> {
         node: &ArtifactNodeRepr,
     ) -> Result<Block, Box<dyn std::error::Error>> {
         let snake_case_release_name = self.release_name.clone().replace("-", "_");
-        let namespace = node
-            .fqn
-            .split(".")
-            .next()
-            .unwrap()
-            .to_string()
-            .replace("_", "-");
+        let namespace = self.artifact_repr.namespace(node);
+
         let name = node.fqn.clone().replace(".", "_");
 
         let data_block = Block::builder("data")
@@ -448,21 +444,8 @@ impl<'a> Composer<'a> {
     ) -> Result<(), Box<dyn std::error::Error>> {
         let source = format!("./{}_module", node.name);
         let name = node.fqn.clone().replace(".", "_");
-        let mut namespace = node
-            .fqn
-            .split(".")
-            .next()
-            .unwrap()
-            .to_string()
-            .replace("_", "-");
 
-        if self.artifact_repr.namespace.is_some() {
-            namespace = self.artifact_repr.namespace.clone().unwrap();
-        }
-
-        if node.namespace.is_some() {
-            namespace = node.namespace.clone().unwrap();
-        }
+        let namespace = self.artifact_repr.namespace(node);
 
         let mut values = vec![];
         let mut attributes = vec![

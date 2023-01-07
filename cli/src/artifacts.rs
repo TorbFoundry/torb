@@ -262,6 +262,26 @@ impl ArtifactRepr {
             namespace: namespace
         }
     }
+
+    pub fn namespace(&self, node: &ArtifactNodeRepr) -> String {
+        let mut namespace = node
+            .fqn
+            .split(".")
+            .next()
+            .unwrap()
+            .to_string()
+            .replace("_", "-");
+
+        if self.namespace.is_some() {
+            namespace = self.namespace.clone().unwrap();
+        }
+
+        if node.namespace.is_some() {
+            namespace = node.namespace.clone().unwrap();
+        }
+
+        namespace
+    }
 }
 
 fn get_start_nodes(graph: &StackGraph) -> Vec<&ArtifactNodeRepr> {
