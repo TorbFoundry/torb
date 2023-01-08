@@ -93,7 +93,8 @@ pub struct StackGraph {
     pub helm_version: String,
     pub meta: Box<Option<ArtifactNodeRepr>>,
     pub incoming_edges: HashMap<String, Vec<String>>,
-    pub namespace: Option<String>
+    pub namespace: Option<String>,
+    pub release: Option<String>
 }
 
 impl StackGraph {
@@ -105,7 +106,8 @@ impl StackGraph {
         tf_version: String,
         helm_version: String,
         meta: Box<Option<ArtifactNodeRepr>>,
-        namespace: Option<String>
+        namespace: Option<String>,
+        release: Option<String>
     ) -> StackGraph {
         StackGraph {
             services: HashMap::<String, ArtifactNodeRepr>::new(),
@@ -119,7 +121,8 @@ impl StackGraph {
             commit,
             meta,
             incoming_edges: HashMap::<String, Vec<String>>::new(),
-            namespace
+            namespace,
+            release
         }
     }
 
@@ -251,6 +254,7 @@ impl Resolver {
         let helm_version = self.get_helm_version();
         let git_sha = self.get_commit_sha();
         let namespace = yaml["namespace"].as_str().map(|ns| { ns.to_string() });
+        let release = yaml["release"].as_str().map(|ns| { ns.to_string() });
         let mut graph = StackGraph::new(
             name,
             kind,
@@ -259,7 +263,8 @@ impl Resolver {
             helm_version,
             git_sha,
             meta,
-            namespace
+            namespace,
+            release
         );
 
         self.walk_yaml(&mut graph, &yaml);

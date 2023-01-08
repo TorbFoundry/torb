@@ -12,6 +12,7 @@ use std::collections::HashSet;
 use std::fs;
 use std::io::Write;
 use thiserror::Error;
+use memorable_wordlist;
 
 #[derive(Error, Debug)]
 pub enum TorbArtifactErrors {
@@ -234,10 +235,11 @@ pub struct ArtifactRepr {
     pub terraform_version: String,
     pub git_commit: String,
     pub stack_name: String,
-    pub namespace: Option<String>,
     pub meta: Box<Option<ArtifactRepr>>,
     pub deploys: Vec<ArtifactNodeRepr>,
-    pub nodes: IndexMap<String, ArtifactNodeRepr>
+    pub nodes: IndexMap<String, ArtifactNodeRepr>,
+    pub namespace: Option<String>,
+    pub release: Option<String>
 }
 
 impl ArtifactRepr {
@@ -248,7 +250,8 @@ impl ArtifactRepr {
         git_commit: String,
         stack_name: String,
         meta: Box<Option<ArtifactRepr>>,
-        namespace: Option<String>
+        namespace: Option<String>,
+        release: Option<String>,
     ) -> ArtifactRepr {
         ArtifactRepr {
             torb_version,
@@ -259,7 +262,8 @@ impl ArtifactRepr {
             meta,
             deploys: Vec::new(),
             nodes: IndexMap::new(),
-            namespace: namespace
+            namespace: namespace,
+            release: release,
         }
     }
 
@@ -281,6 +285,14 @@ impl ArtifactRepr {
         }
 
         namespace
+    }
+
+    pub fn release(&self) -> String {
+        if self.release.is_some() {
+            self.release.clone().unwrap()
+        } else {
+            memorable_wordlist::kebab_case(16)
+        }
     }
 }
 
@@ -317,7 +329,8 @@ fn walk_graph(graph: &StackGraph) -> Result<ArtifactRepr, Box<dyn std::error::Er
         graph.commit.clone(),
         graph.name.clone(),
         meta,
-        graph.namespace.clone()
+        graph.namespace.clone(),
+        graph.release.clone()
     );
 
     let mut node_map: IndexMap<String, ArtifactNodeRepr> = IndexMap::new();

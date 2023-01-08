@@ -3,7 +3,6 @@ use crate::resolver::inputs::{InputResolver, NO_INPUTS_FN, NO_VALUES_FN};
 use crate::utils::{buildstate_path_or_create, torb_path};
 
 use hcl::{Block, Body, Expression, Object, ObjectKey, RawExpression};
-use memorable_wordlist;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
@@ -96,13 +95,12 @@ pub struct Composer<'a> {
 
 impl<'a> Composer<'a> {
     pub fn new(hash: String, artifact_repr: &ArtifactRepr) -> Composer {
-        let memorable_words = memorable_wordlist::kebab_case(16);
 
         Composer {
             hash: hash,
             build_files_seen: HashSet::new(),
             fqn_seen: HashSet::new(),
-            release_name: memorable_words,
+            release_name: artifact_repr.release(),
             main_struct: Body::builder(),
             artifact_repr: artifact_repr,
         }
