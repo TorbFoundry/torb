@@ -1,3 +1,4 @@
+![Torb](./Torb.png)
 
 Shoutout to my friend @SystemOverlord \[REAL NAME REDACTED\] for the anvil and sparks image for the org. This shoutout and the beer I have yet to get him satisfy our arrangement.
 
@@ -157,7 +158,7 @@ When a stack is initialized, built or deployed the dependency chain is walked to
 
 #### Initializing
 
-After you've checked out a stack you need to initialize it before you can proceed to build and deploy the stack. Each unit can in it's definition include an initialization step to help set it up in your project. Most of the time for `projects` this means creating the folder, running a generator of somekind to create default code and copying over any config or build files it will need. If you need to examine a particular unit to see what it does you can check it out in (Torb Artifacts)[https://github.com/TorbFoundry/torb-artifacts]
+After you've checked out a stack you need to initialize it before you can proceed to build and deploy the stack. Each unit can in it's definition include an initialization step to help set it up in your project. Most of the time for `projects` this means creating the folder, running a generator of somekind to create default code and copying over any config or build files it will need. If you need to examine a particular unit to see what it does you can check it out in (https://github.com/TorbFoundry/torb-artifacts)[Torb Artifacts]
 
 To initialize your stack run:
 
@@ -170,11 +171,11 @@ With the stack that we're using your repo will look something like this:
 createreactapp flaskapp       flaskapp_venv  stack.yaml
 ```
 
-Each folder is the name of the unit in in (Torb Artifacts)[https://github.com/TorbFoundry/torb-artifacts], eventually you'll be able to name these whatever you want but for now they have to match the unit name. 
+Each folder is the name of the unit in (https://github.com/TorbFoundry/torb-artifacts)[Torb Artifacts], eventually you'll be able to name these whatever you want but for now they have to match the unit name. 
 
 Depending on the unit, such as this react app, you'll need to build the artifact like `npm build` before you are able to deploy. Go ahead and change directory into `createreactapp` and run `npm run build`. Torb will not install programming languages, libraries or anything else for working with projects so make sure you have these things installed.
 
-If you need to install npm and node for this tutorial, you can follow their (guide)[https://docs.npmjs.com/downloading-and-installing-node-js-and-npm]
+If you need to install npm and node for this tutorial, you can follow their (https://docs.npmjs.com/downloading-and-installing-node-js-and-npm)[guide]
 
 Next we'll look at building and deploying.
 
@@ -240,7 +241,7 @@ There are some tricky aspects of the deploy, we rely on the `helm provider` in T
 
 As an example, if the chart being applied isn't useing StatefulSets and includes PersistentVolumeClaims your PVC will be deleted when the chart is cleaned up. In a lot of ways it may be better to create a separate PVC under a StatefulSet in addition to the existing Deployment based chart and see if the chart supports passing a reference to that claim, versus relying on them to do the correct thing for your usecase. 
 
-Torb does not at this moment have a way to enforce these practices but as we grow can put requirements in place for our artifacts that will help here. Hopefully this isn't too often exposed to you as end users, but is a concern for anyone who is creating stacks and units under (Torb Artifacts)[https://github.com/TorbFoundry/torb-artifacts]
+Torb does not at this moment have a way to enforce these practices but as we grow can put requirements in place for our artifacts that will help here. Hopefully this isn't too often exposed to you as end users, but is a concern for anyone who is creating stacks and units under (https://github.com/TorbFoundry/torb-artifacts)[Torb Artifacts]
 
 Longer term we may work on something to replace using Helm while trying to support the chart format itself but for now it's the best we have. As an example we've looked into Kustomize and handling releases ourselves but need to further evaluate how much we will lose out on from the Helm ecosystem.
 
@@ -259,9 +260,4 @@ Currently we are using a local backend for Terraform but do plan to support popu
 If all is good you will eventually see a success message from Terraform with a list of new infrastructure created, changed or removed.
 
 In the event of an issue the default timeout is 5 minutes and you can safely clean up releases in Helm without impacting Torb.
-
-
-
-
-
 
