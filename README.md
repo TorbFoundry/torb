@@ -1,4 +1,4 @@
-![Torb](./Torb.png =250x250)
+![Torb](./Torb.png=250x250)
 
 Shoutout to my friend @SystemOverlord \[REAL NAME REDACTED\] for the anvil and sparks image for the org. This shoutout and the beer I have yet to get him satisfy our arrangement.
 
