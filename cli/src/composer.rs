@@ -1,12 +1,13 @@
 use crate::artifacts::{ArtifactNodeRepr, ArtifactRepr};
 use crate::resolver::inputs::{InputResolver, NO_INPUTS_FN, NO_VALUES_FN};
-use crate::utils::{buildstate_path_or_create, torb_path};
+use crate::utils::{buildstate_path_or_create, for_each_artifact_repository, torb_path};
 
 use hcl::{Block, Body, Expression, Object, ObjectKey, RawExpression};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap};
 use std::fs;
 use std::path::Path;
 use thiserror::Error;
+use indexmap::IndexSet;
 
 #[derive(Error, Debug)]
 pub enum TorbComposerErrors {}
@@ -27,6 +28,7 @@ fn kebab_to_snake_case(input: &str) -> String {
     input.replace("-", "_")
 }
 
+#[allow(dead_code)]
 fn snake_case_to_kebab(input: &str) -> String {
     input.replace("_", "-")
 }
@@ -86,8 +88,8 @@ impl TryFrom<&str> for InputAddress {
 
 pub struct Composer<'a> {
     hash: String,
-    build_files_seen: HashSet<String>,
-    fqn_seen: HashSet<String>,
+    build_files_seen: IndexSet<String>,
+    fqn_seen: IndexSet<String>,
     release_name: String,
     main_struct: hcl::BodyBuilder,
     artifact_repr: &'a ArtifactRepr,
@@ -95,11 +97,10 @@ pub struct Composer<'a> {
 
 impl<'a> Composer<'a> {
     pub fn new(hash: String, artifact_repr: &ArtifactRepr) -> Composer {
-
         Composer {
             hash: hash,
-            build_files_seen: HashSet::new(),
-            fqn_seen: HashSet::new(),
+            build_files_seen: IndexSet::new(),
+            fqn_seen: IndexSet::new(),
             release_name: artifact_repr.release(),
             main_struct: Body::builder(),
             artifact_repr: artifact_repr,
@@ -203,31 +204,35 @@ impl<'a> Composer<'a> {
     }
 
     fn copy_supporting_build_files(&self) -> Result<(), Box<dyn std::error::Error>> {
-        let path = torb_path();
-        let supporting_build_files_path = path.join("torb-artifacts/common");
-        let buildstate_path = buildstate_path_or_create();
-        let new_environment_path = buildstate_path.join("iac_environment");
-        let dest =
-            new_environment_path.join(supporting_build_files_path.as_path().file_name().unwrap());
+        for_each_artifact_repository(Box::new(|repos_path, repo| {
+            let repo_path = repos_path.join(repo.file_name());
+            let source_path = repo_path.join("common");
+            let buildstate_path = buildstate_path_or_create();
 
-        if !dest.exists() {
-            fs::create_dir(dest.clone()).expect("Unable to create supporting buildfile directory at destination, please check torb has been initialized properly.");
-        }
+            let new_environment_path = buildstate_path.join("iac_environment");
+            let dest = new_environment_path
+                .join(source_path.as_path().file_name().unwrap())
+                .join(repo.file_name());
 
-        self._copy_files_recursively(supporting_build_files_path, dest);
+            if !dest.exists() {
+                fs::create_dir_all(dest.clone()).expect("Unable to create supporting buildfile directory at destination, please check torb has been initialized properly.");
+            }
 
-        let provider_path = path.join("torb-artifacts/common/providers");
-        let dest = new_environment_path.clone();
+            self._copy_files_recursively(source_path, dest);
 
-        self._copy_files_recursively(provider_path, dest);
+            let provider_path = repo_path.join("common/providers");
+            let dest = new_environment_path.clone();
+
+            self._copy_files_recursively(provider_path, dest);
+        }))?;
 
         Ok(())
     }
 
     fn _copy_files_recursively(&self, path: std::path::PathBuf, dest: std::path::PathBuf) -> () {
-        let error_string = format!("Failed reading torb-artifacts dir: {}. Please check that torb is correctly initialized.", path.to_str().unwrap());
+        let error_string = format!("Failed reading dir: {}. Please check that torb is correctly initialized and that any additional artifact repos have been pulled with `torb artifacts refresh`.", path.to_str().unwrap());
         for entry in path.read_dir().expect(&error_string) {
-            let error_string = format!("Failed reading entry in torb-artifacts dir: {}. Please check that torb is correctly initialized.", path.to_str().unwrap());
+            let error_string = format!("Failed reading entry in dir: {}. Please check that torb is correctly initialized and that any additional artifacts repos have been pulled with `torb artifacts refresh`.", path.to_str().unwrap());
             let entry = entry.expect(&error_string);
             if entry.path().is_dir() {
                 let new_dest = dest.join(entry.path().file_name().unwrap());

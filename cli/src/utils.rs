@@ -1,4 +1,4 @@
-use std::process::{Command, Output};
+use std::{process::{Command, Output}, fs::DirEntry};
 use data_encoding::BASE32;
 use sha2::{Digest, Sha256};
 use std::error::Error;
@@ -42,6 +42,21 @@ pub fn buildstate_path_or_create() -> std::path::PathBuf {
         std::fs::create_dir_all(&current_dir_state_dir).unwrap();
         current_dir_state_dir
     }
+}
+
+pub fn for_each_artifact_repository(mut closure: Box<dyn FnMut(std::path::PathBuf, DirEntry) -> () + '_ >) -> Result<(), Box<dyn Error>> {
+    let path = torb_path();
+    let repo_path = path.join("repositories");
+
+    let repos = std::fs::read_dir(&repo_path)?;
+
+    for repo_res in repos {
+        let repo = repo_res?;
+
+        closure(repo_path.clone(), repo);
+    }
+
+    Ok(())
 }
 
 pub fn run_command_in_user_shell(

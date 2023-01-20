@@ -1,6 +1,6 @@
 use crate::artifacts::{ArtifactNodeRepr, ArtifactRepr};
 use crate::utils::{run_command_in_user_shell, CommandConfig, CommandPipeline};
-use std::collections::HashSet;
+use indexmap::IndexSet;
 use std::fs;
 use std::process::{Command, Output};
 use thiserror::Error;
@@ -19,7 +19,7 @@ pub enum TorbBuilderErrors {
 
 pub struct StackBuilder<'a> {
     artifact: &'a ArtifactRepr,
-    built: HashSet<String>,
+    built: IndexSet<String>,
     dryrun: bool,
     build_platforms: String,
 }
@@ -32,7 +32,7 @@ impl<'a> StackBuilder<'a> {
     ) -> StackBuilder<'a> {
         StackBuilder {
             artifact: artifact,
-            built: HashSet::new(),
+            built: IndexSet::new(),
             dryrun: dryrun,
             build_platforms: build_platforms,
         }

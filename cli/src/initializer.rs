@@ -1,19 +1,20 @@
 use crate::artifacts::{ArtifactRepr, ArtifactNodeRepr};
-use std::{collections::HashSet, env::current_dir};
+use std::{env::current_dir};
 use crate::utils::{run_command_in_user_shell, buildstate_path_or_create};
+use indexmap::IndexSet;
 
 const TOKEN: &str = "TORB";
 
 pub struct StackInitializer<'a> {
     artifact: &'a ArtifactRepr,
-    initialized: HashSet<String>,
+    initialized: IndexSet<String>,
 }
 
 impl<'a> StackInitializer<'a> {
     pub fn new(artifact: &'a ArtifactRepr) -> StackInitializer {
         StackInitializer {
             artifact: artifact,
-            initialized: HashSet::new(),
+            initialized: IndexSet::new(),
         }
     }
 
@@ -85,12 +86,6 @@ impl<'a> StackInitializer<'a> {
             Some(start) => {
                 let mut end = script_step.split_at(start).1.find(" ").unwrap_or(script_step.len());
                 end = script_step.split_at(start).1.find("/").unwrap_or(end);
-
-
-                println!("Script Step: {}", script_step);
-                println!("Default End: {}", script_step.len() - start);
-                println!("Start: {}, End: {}", start, end);
-                println!("script_step_len: {}", script_step.len());
 
                 let remaining = if start == 0 && end == script_step.len() {
                     let resolved_token = self.resolve_input_token(script_step.to_string(), node);

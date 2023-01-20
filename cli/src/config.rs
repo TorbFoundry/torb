@@ -2,6 +2,7 @@ use serde::{Serialize, Deserialize};
 use serde_yaml::{self};
 use once_cell::sync::Lazy;
 use std::fs;
+use indexmap::IndexMap;
 
 use crate::utils::{torb_path};
 
@@ -9,7 +10,8 @@ use crate::utils::{torb_path};
 #[allow(non_snake_case)]
 pub struct Config {
     pub githubToken: String,
-    pub githubUser: String
+    pub githubUser: String,
+    pub repositories: Option<IndexMap<String, String>>
 }
 
 impl Config {
