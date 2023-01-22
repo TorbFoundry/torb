@@ -1,7 +1,7 @@
 pub mod inputs;
 
 use crate::artifacts::{ArtifactNodeRepr, BuildStep};
-use crate::utils::{normalize_name, torb_path};
+use crate::utils::{for_each_artifact_repository, normalize_name, torb_path};
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use serde_yaml::{self, Value};
@@ -88,13 +88,14 @@ pub struct StackGraph {
     pub name: String,
     pub version: String,
     pub kind: String,
-    pub commit: String,
+    pub commits: IndexMap<String, String>,
     pub tf_version: String,
     pub helm_version: String,
     pub meta: Box<Option<ArtifactNodeRepr>>,
     pub incoming_edges: HashMap<String, Vec<String>>,
     pub namespace: Option<String>,
-    pub release: Option<String>
+    pub release: Option<String>,
+    pub repositories: Option<Vec<String>>,
 }
 
 impl StackGraph {
@@ -102,12 +103,13 @@ impl StackGraph {
         name: String,
         kind: String,
         version: String,
-        commit: String,
+        commits: IndexMap<String, String>,
         tf_version: String,
         helm_version: String,
         meta: Box<Option<ArtifactNodeRepr>>,
         namespace: Option<String>,
-        release: Option<String>
+        release: Option<String>,
+        repositories: Option<Vec<String>>,
     ) -> StackGraph {
         StackGraph {
             services: HashMap::<String, ArtifactNodeRepr>::new(),
@@ -118,11 +120,12 @@ impl StackGraph {
             kind,
             tf_version,
             helm_version,
-            commit,
+            commits,
             meta,
             incoming_edges: HashMap::<String, Vec<String>>::new(),
             namespace,
-            release
+            release,
+            repositories,
         }
     }
 
@@ -224,27 +227,11 @@ impl Resolver {
         Ok(graph)
     }
 
-    fn resolve_meta(
-        &self,
-        meta_file: &str,
-    ) -> Result<Box<Option<ArtifactNodeRepr>>, Box<dyn Error>> {
-        if meta_file != "" {
-            let torb_path = torb_path();
-            let artifacts_path = torb_path.join("torb-artifacts");
-            let meta = self.resolve_stack(&meta_file, "stacks", "META", artifacts_path)?;
-
-            Ok(Box::new(Some(meta)))
-        } else {
-            Ok(Box::new(None))
-        }
-    }
-
     fn build_graph(
         &self,
         yaml: serde_yaml::Value,
     ) -> Result<StackGraph, Box<dyn std::error::Error>> {
-        let meta_file = yaml["config"]["meta"].as_str().unwrap_or("");
-        let meta = self.resolve_meta(&meta_file)?;
+        let meta = Box::new(None);
         let mut name = yaml["name"].as_str().unwrap().to_string();
         name = normalize_name(&name);
 
@@ -252,19 +239,31 @@ impl Resolver {
         let kind = yaml["kind"].as_str().unwrap().to_string();
         let tf_version = self.get_tf_version();
         let helm_version = self.get_helm_version();
-        let git_sha = self.get_commit_sha();
-        let namespace = yaml["namespace"].as_str().map(|ns| { ns.to_string() });
-        let release = yaml["release"].as_str().map(|ns| { ns.to_string() });
+        let mut commits = IndexMap::new();
+
+        for_each_artifact_repository(Box::new(|_repo_path, repo| {
+            let repo_string = &repo.file_name().into_string().unwrap();
+            let sha = self.get_commit_sha(repo_string);
+
+            commits.insert(repo_string.clone(), sha);
+        }))?;
+
+        let namespace = yaml["namespace"].as_str().map(|ns| ns.to_string());
+        let release = yaml["release"].as_str().map(|ns| ns.to_string());
+        let repositories: Option<Vec<String>> =
+            serde_yaml::from_value(yaml["repositories"].clone())?;
+
         let mut graph = StackGraph::new(
             name,
             kind,
             version,
+            commits,
             tf_version,
             helm_version,
-            git_sha,
             meta,
             namespace,
-            release
+            release,
+            repositories,
         );
 
         self.walk_yaml(&mut graph, &yaml);
@@ -293,17 +292,22 @@ impl Resolver {
         String::from_utf8(cmd_out.stdout).unwrap()
     }
 
-    fn get_commit_sha(&self) -> String {
+    fn get_commit_sha(&self, repo: &String) -> String {
         let torb_path = torb_path();
-        let artifacts_path = torb_path.join("torb-artifacts");
+        let artifacts_path = torb_path.join("repositories").join(repo);
         let cmd_out = Command::new("git")
             .arg("rev-parse")
             .arg("HEAD")
             .current_dir(artifacts_path)
             .output()
-            .expect("Failed to get current commit SHA for torb-artifacts, please make sure git is installed and that Torb has been initialized.");
+            .expect("Failed to get current commit SHA for an artifact repo, please make sure git is installed and that Torb has been initialized.");
 
-        String::from_utf8(cmd_out.stdout).unwrap()
+        let mut sha = String::from_utf8(cmd_out.stdout).unwrap();
+
+        // Removes newline
+        sha.pop();
+
+        sha
     }
 
     fn resolve_service(
@@ -314,7 +318,8 @@ impl Resolver {
         service_name: &str,
         artifact_path: PathBuf,
         inputs: IndexMap<String, String>,
-        values: serde_yaml::Value
+        values: serde_yaml::Value,
+        source: &str
     ) -> Result<ArtifactNodeRepr, Box<dyn Error>> {
         let services_path = artifact_path.join("services");
         let service_path = services_path.join(service_name);
@@ -327,7 +332,11 @@ impl Resolver {
             .ok_or("Could not convert path to string.")?
             .to_string();
         node.file_path = node_fp;
-        node.values = serde_yaml::to_string(&values).expect("Unable to convert values yaml to string.");
+
+        node.source = Some(source.to_string());
+
+        node.values =
+            serde_yaml::to_string(&values).expect("Unable to convert values yaml to string.");
         node.validate_map_and_set_inputs(inputs);
         node.discover_and_set_implicit_dependencies(&stack_name.to_string())?;
 
@@ -377,6 +386,7 @@ impl Resolver {
         inputs: IndexMap<String, String>,
         build_config: Option<&Value>,
         values: serde_yaml::Value,
+        source: &str
     ) -> Result<ArtifactNodeRepr, Box<dyn Error>> {
         let projects_path = artifact_path.join("projects");
         let project_path = projects_path.join(project_name);
@@ -387,6 +397,8 @@ impl Resolver {
             .to_str()
             .ok_or("Could not convert path to string.")?
             .to_string();
+
+        node.source = Some(source.to_string());
 
         let build_step = node.build_step.or(Some(BuildStep::default())).unwrap();
         let new_build_step: BuildStep = match build_config {
@@ -410,45 +422,9 @@ impl Resolver {
         node.fqn = format!("{}.{}.{}", stack_name, stack_kind_name, node_name);
         node.file_path = node_fp;
         node.validate_map_and_set_inputs(inputs);
-        node.values = serde_yaml::to_string(&values).expect("Unable to convert values yaml to string.");
+        node.values =
+            serde_yaml::to_string(&values).expect("Unable to convert values yaml to string.");
         node.discover_and_set_implicit_dependencies(&stack_name.to_string())?;
-
-        Ok(node)
-    }
-
-    fn resolve_stack(
-        &self,
-        stack_name: &str,
-        stack_kind_name: &str,
-        name: &str,
-        artifact_path: PathBuf,
-    ) -> Result<ArtifactNodeRepr, Box<dyn Error>> {
-        let stack_path = artifact_path.join("stacks");
-        let stack_yaml_path = stack_path.join(format!("{}.yaml", stack_name));
-        let torb_yaml = std::fs::read_to_string(&stack_yaml_path)?;
-        let graph = self.build_graph(serde_yaml::from_str(torb_yaml.as_str())?)?;
-        let fqn = format!("{}.{}.{}", stack_name, stack_kind_name, name);
-        let node = ArtifactNodeRepr::new(
-            fqn,
-            graph.name.clone(),
-            graph.version.clone(),
-            "stack".to_string(),
-            None,
-            None,
-            None,
-            IndexMap::<String, Option<IndexMap<String, String>>>::new(),
-            IndexMap::<String, (String, String)>::new(),
-            IndexMap::<String, String>::new(),
-            Vec::<String>::new(),
-            stack_yaml_path
-                .to_str()
-                .ok_or("Could not convert path to string.")?
-                .to_string(),
-            Some(graph),
-            Some(Vec::new()),
-            "".to_string(),
-            None
-        );
 
         Ok(node)
     }
@@ -467,19 +443,6 @@ impl Resolver {
         }
     }
 
-    // fn deserialize_outputs(params: Option<&serde_yaml::Value>) -> Result<Vec<String>, Box<dyn Error>> {
-    //     match params {
-    //         Some(params) => {
-    //             let deserialized_params: Vec<String> = serde_yaml::from_value(params.clone())?;
-
-    //             Ok(deserialized_params)
-    //         },
-    //         None => {
-    //             Ok(Vec::new())
-    //         }
-    //     }
-    // }
-
     fn resolve_node(
         &self,
         stack_name: &str,
@@ -491,13 +454,19 @@ impl Resolver {
         let err = TorbResolverErrors::CannotParseStackManifest;
         let home_dir = dirs::home_dir().unwrap();
         let torb_path = home_dir.join(".torb");
-        let artifacts_path = torb_path.join("torb-artifacts");
+        let repository_path = torb_path.join("repositories");
+
+        let repo = match yaml.get("source") {
+            Some(source) => source.as_str().unwrap(),
+            None => "torb-artifacts",
+        };
+
+        let artifacts_path = repository_path.join(repo);
+
         let inputs = Resolver::deserialize_params(yaml.get("inputs"))
             .expect("Unable to deserialize inputs.");
 
-        let config_values = yaml
-            .get("values")
-            .unwrap_or(&serde_yaml::Value::Null);
+        let config_values = yaml.get("values").unwrap_or(&serde_yaml::Value::Null);
 
         let mut node = match stack_kind_name {
             "service" => {
@@ -514,7 +483,8 @@ impl Resolver {
                     service_name,
                     artifacts_path,
                     inputs,
-                    config_values.clone()
+                    config_values.clone(),
+                    repo
                 )
             }
             "project" => {
@@ -533,18 +503,10 @@ impl Resolver {
                     inputs,
                     build_config,
                     config_values.clone(),
+                    repo
                 )
             }
-            // TODO(Ian): Revisit nested stacks after MVP.
-            // "stack" => {
-            //     let local_stack_name = yaml.get("project").ok_or(err)?.as_str().unwrap();
-            //     self.resolve_stack(
-            //         stack_name,
-            //         stack_kind_name,
-            //         local_stack_name,
-            //         artifacts_path,
-            //     )
-            // }
+
             _ => return Err(Box::new(err)),
         }?;
 
@@ -552,8 +514,7 @@ impl Resolver {
         match dep_values {
             Some(deps) => {
                 let yaml_str = serde_yaml::to_string(deps)?;
-                let deps: NodeDependencies =
-                    serde_yaml::from_str(yaml_str.as_str()).unwrap();
+                let deps: NodeDependencies = serde_yaml::from_str(yaml_str.as_str()).unwrap();
                 node.dependency_names = deps;
 
                 Ok(node)
@@ -583,7 +544,10 @@ impl Resolver {
                                 .unwrap();
 
                             graph.add_service(&service_node);
-                            graph.add_all_incoming_edges_downstream(stack_name.clone(), &service_node);
+                            graph.add_all_incoming_edges_downstream(
+                                stack_name.clone(),
+                                &service_node,
+                            );
                         }
 
                         Some(())
@@ -604,7 +568,10 @@ impl Resolver {
                                 )
                                 .expect("Failed to resolve project node.");
                             graph.add_project(&project_node);
-                            graph.add_all_incoming_edges_downstream(stack_name.clone(), &project_node);
+                            graph.add_all_incoming_edges_downstream(
+                                stack_name.clone(),
+                                &project_node,
+                            );
                         }
 
                         Some(())
@@ -628,7 +595,7 @@ impl Resolver {
                 //         graph.add_all_incoming_edges_downstream(global_stack_name.clone(), &stack_node);
                 //     }
                 // }
-                _ => { () }
+                _ => (),
             }
         }
     }

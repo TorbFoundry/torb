@@ -33,6 +33,27 @@ pub fn cli() -> Command<'static> {
                 ),
         )
         .subcommand(
+            SubCommand::with_name("artifacts")
+            .about("Verbs for interacting with artifact repositories.")
+            .setting(AppSettings::ArgRequiredElseHelp)
+            .subcommand(
+                SubCommand::with_name("clone")
+                    .about("Iterate through `repositories` config option and clone all that don't exist.")
+            )
+            .subcommand(
+                SubCommand::with_name("refresh")
+                    .about("Iterate through the .torb/repositories entries and pull --rebase to latest commit. Can be configured to act on specific repos, see help for details.")
+                    .arg(
+                        Arg::new("name")
+                            .long("name")
+                            .takes_value(true)
+                            .required(false)
+                            .default_value("")
+                            .short('n')
+                    )
+            )
+        )
+        .subcommand(
             SubCommand::with_name("stack")
                 .about("Verbs for interacting with Torb stacks.")
                 .setting(AppSettings::ArgRequiredElseHelp)

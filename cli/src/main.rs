@@ -1,5 +1,6 @@
 mod artifacts;
 mod builder;
+mod cli;
 mod composer;
 mod config;
 mod deployer;
@@ -7,24 +8,28 @@ mod initializer;
 mod resolver;
 mod utils;
 mod vcs;
-mod cli;
 
+use indexmap::IndexMap;
+use rayon::prelude::*;
 use std::fs;
 use std::fs::File;
-use std::io;
+use std::io::{self, Write};
 use std::process::Command;
 use thiserror::Error;
 use ureq;
 use utils::{buildstate_path_or_create, torb_path};
 
-use crate::artifacts::{load_build_file, get_build_file_info, deserialize_stack_yaml_into_artifact, write_build_file, ArtifactRepr};
+use crate::artifacts::{
+    deserialize_stack_yaml_into_artifact, get_build_file_info, load_build_file, write_build_file,
+    ArtifactRepr,
+};
+use crate::builder::StackBuilder;
+use crate::cli::cli;
 use crate::composer::Composer;
 use crate::config::TORB_CONFIG;
+use crate::deployer::StackDeployer;
 use crate::initializer::StackInitializer;
 use crate::vcs::{GitVersionControl, GithubVCS};
-use crate::builder::{StackBuilder};
-use crate::deployer::{StackDeployer};
-use crate::cli::cli;
 
 const VERSION: &'static str = env!("CARGO_PKG_VERSION");
 
@@ -34,26 +39,34 @@ pub enum TorbCliErrors {
     ManifestInvalid,
     #[error("Stack meta template missing or invalid. Please run `torb init`")]
     StackMetaNotFound,
+    #[error("The stack name was found in multiple repository manifests please prefix the stack name with the repository you wish to use. i.e. torb-artifacts:flask-app-with-react-frontend")]
+    StackAmbiguous,
 }
 
 fn init() {
     println!("Initializing...");
     let torb_path_buf = torb_path();
     let torb_path = torb_path_buf.as_path();
+    let artifacts_path = &torb_path.join("repositories");
     if !torb_path.is_dir() {
         println!("Creating {}...", torb_path.display());
+
         fs::create_dir(&torb_path).unwrap();
+    }
+
+    if !artifacts_path.is_dir() {
         println!("Cloning build artifacts...");
+        fs::create_dir(artifacts_path).unwrap();
         let _clone_cmd_out = Command::new("git")
             .arg("clone")
             .arg("git@github.com:TorbFoundry/torb-artifacts.git")
-            .current_dir(&torb_path)
+            .current_dir(&artifacts_path)
             .output()
             .expect("Failed to clone torb-artifacts");
     };
 
     let torb_config_path = torb_path.join("config.yaml");
-    let torb_config_template = torb_path.join("torb-artifacts/config.template.yaml");
+    let torb_config_template = torb_path.join("repositories/torb-artifacts/config.template.yaml");
 
     if !torb_config_path.exists() {
         fs::copy(torb_config_template, torb_config_path).expect("Unable to copy config template file from ~/.torb/torb-artifacts/config.template.yaml. Please check that Torb has been initialized properly.");
@@ -64,15 +77,15 @@ fn init() {
     if !tf_bin_path.is_file() {
         println!("Downloading terraform...");
         let tf_url = match std::env::consts::OS {
-            "linux" => "https://releases.hashicorp.com/terraform/1.2.5/terraform_1.2.5_linux_amd64.zip",
-            "macos" => "https://releases.hashicorp.com/terraform/1.2.5/terraform_1.2.5_darwin_amd64.zip",
+            "linux" => {
+                "https://releases.hashicorp.com/terraform/1.2.5/terraform_1.2.5_linux_amd64.zip"
+            }
+            "macos" => {
+                "https://releases.hashicorp.com/terraform/1.2.5/terraform_1.2.5_darwin_amd64.zip"
+            }
             _ => panic!("Unsupported OS"),
         };
-        let resp = ureq::get(
-            tf_url
-        )
-        .call()
-        .unwrap();
+        let resp = ureq::get(tf_url).call().unwrap();
 
         let mut out = File::create(&tf_path).unwrap();
         io::copy(&mut resp.into_reader(), &mut out).expect("Failed to write terraform zip file.");
@@ -99,8 +112,7 @@ fn create_repo(path: String, local_only: bool) {
 
         vcs.set_cwd(buf);
 
-        vcs.create_repo(local_only)
-            .expect("Failed to create repo.");
+        vcs.create_repo(local_only).expect("Failed to create repo.");
     } else {
         println!("Repo already exists locally. Skipping creation.");
     }
@@ -110,7 +122,7 @@ fn checkout_stack(name: Option<&str>) {
     match name {
         Some(name) => {
             let stack_yaml: String =
-                pull_stack(name, false).expect("Failed to pull stack from torb-artifacts.");
+                pull_stack(name, false).expect("Failed to pull stack from any repository. Check that the source is configured correctly and that the stack exists.");
 
             fs::write("./stack.yaml", stack_yaml).expect("Failed to write stack.yaml.");
         }
@@ -143,58 +155,179 @@ fn compose_build_environment(build_hash: String, build_artifact: &ArtifactRepr) 
     composer.compose().unwrap();
 }
 
-fn run_dependency_build_steps(_build_hash: String, build_artifact: &ArtifactRepr, build_platform_string: String, dryrun: bool) -> Result<(), Box<dyn std::error::Error>> {
+fn run_dependency_build_steps(
+    _build_hash: String,
+    build_artifact: &ArtifactRepr,
+    build_platform_string: String,
+    dryrun: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
     let mut builder = StackBuilder::new(build_artifact, build_platform_string, dryrun);
 
     builder.build()
 }
 
-fn run_deploy_steps(_build_hash: String, build_artifact: &ArtifactRepr, dryrun: bool) -> Result<(), Box<dyn std::error::Error>> {
-    let mut deployer = StackDeployer::new(); 
+fn run_deploy_steps(
+    _build_hash: String,
+    build_artifact: &ArtifactRepr,
+    dryrun: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut deployer = StackDeployer::new();
 
     deployer.deploy(build_artifact, dryrun)
 }
 
-fn update_artifacts() {
-    let torb_path_buf = torb_path();
-    let torb_path = torb_path_buf.as_path();
-    let artifacts_path = torb_path.join("torb-artifacts");
-    let _clone_cmd_out = Command::new("git")
-        .arg("pull")
-        .arg("--rebase")
-        .current_dir(&artifacts_path)
-        .output()
-        .expect("Failed to pull torb-artifacts");
+fn clone_artifacts() {
+    if TORB_CONFIG.repositories.is_some() {
+        let repos_to_aliases = TORB_CONFIG.repositories.clone().unwrap();
+        let torb_path = torb_path();
+        let artifacts_path = torb_path.join("repositories");
+        repos_to_aliases
+            .iter()
+            .par_bridge()
+            .for_each(|(repo, alias)| {
+                if alias == "" {
+                    let err_msg = format!("Failed to clone {}.", &repo);
+
+                    let _clone_cmd_out = Command::new("git")
+                        .arg("clone")
+                        .arg(repo)
+                        .current_dir(&artifacts_path)
+                        .output()
+                        .expect(&err_msg);
+                } else {
+                    let alias_path = artifacts_path.join(&alias);
+                    std::fs::create_dir_all(&alias_path)
+                        .expect("Unable to create aliased dir for artifact repo.");
+
+                    let err_msg = format!("Failed to clone {} into {}.", &repo, &alias);
+
+                    let _clone_cmd_out = Command::new("git")
+                        .arg("clone")
+                        .arg(repo)
+                        .arg(".")
+                        .current_dir(&alias_path)
+                        .output()
+                        .expect(&err_msg);
+                }
+            })
+    }
 }
 
-fn load_stack_manifest() -> serde_yaml::Value {
+fn update_artifacts(name: Option<&str>) {
+    let filter_name = name.unwrap();
     let torb_path = torb_path();
-    let artifacts_path = torb_path.join("torb-artifacts");
-    let stack_manifest_path = artifacts_path.join("stacks").join("manifest.yaml");
-    let stack_manifest_contents = fs::read_to_string(&stack_manifest_path).unwrap();
-    let stack_manifest_yaml: serde_yaml::Value =
-        serde_yaml::from_str(&stack_manifest_contents).unwrap();
-    
-    stack_manifest_yaml.get("stacks").unwrap().clone()
+    let repo_path = torb_path.join("repositories");
+
+    let repos = fs::read_dir(&repo_path).unwrap().par_bridge();
+
+    repos.for_each(|repo_result| {
+        let repo = repo_result.unwrap();
+
+        if filter_name == "" || repo.file_name() == filter_name {
+            print!(
+                "Refreshing '{}' artifact repository...",
+                repo.file_name()
+                    .into_string()
+                    .expect("Failed to convert OsString to String.")
+            );
+            io::stdout()
+                .flush()
+                .expect("IO buffer should have valid content.");
+
+            let err_msg = format!("Failed to pull {:?}", repo.file_name());
+            let artifacts_path = repo_path.join(repo.file_name());
+            let pull_cmd_out = Command::new("git")
+                .arg("pull")
+                .arg("--rebase")
+                .current_dir(&artifacts_path)
+                .output();
+
+            match pull_cmd_out {
+                Ok(_) => {
+                    println!("done!");
+                }
+                Err(_) => {
+                    panic!("{}", err_msg);
+                }
+            }
+        }
+    })
+}
+
+fn load_stack_manifests() -> IndexMap<String, serde_yaml::Value> {
+    let torb_path = torb_path();
+    let artifacts_path = torb_path.join("repositories");
+
+    let repository_paths = fs::read_dir(&artifacts_path)
+        .expect("Unable to read list of repositories. Please re-initialize Torb.");
+
+    let mut manifests = IndexMap::<String, serde_yaml::Value>::new();
+
+    for artifact_path_result in repository_paths {
+        let artifact_path =
+            artifact_path_result.expect("Unable to read entry in repositories, try again.");
+        let stack_manifest_path = artifact_path.path().join("stacks").join("manifest.yaml");
+        let stack_manifest_contents = fs::read_to_string(&stack_manifest_path).unwrap();
+        let stack_manifest_yaml: serde_yaml::Value =
+            serde_yaml::from_str(&stack_manifest_contents).unwrap();
+
+        let manifest_name = artifact_path.file_name().to_str().unwrap().to_string();
+
+        manifests.insert(
+            manifest_name,
+            stack_manifest_yaml.get("stacks").unwrap().clone(),
+        );
+    }
+
+    manifests
 }
 
 fn pull_stack(
     stack_name: &str,
     fail_not_found: bool,
 ) -> Result<String, Box<dyn std::error::Error>> {
-    let stacks = load_stack_manifest();
-    let stack_entry = stacks.get(stack_name);
+    let mut repo = "";
+    let mut stack = stack_name;
+
+    if stack_name.find(":").is_some() {
+        let stack_parts: Vec<&str> = stack_name.split(":").collect();
+        repo = stack_parts[0];
+        stack = stack_parts[1];
+    }
+
+    let manifests = load_stack_manifests();
+
+    let mut count = 0;
+
+    for (_name, manifest) in manifests.iter() {
+        let stack_entry = manifest.get(stack);
+        if stack_entry.is_some() {
+            count += 1;
+        }
+    }
+
+    if count > 1 && repo == "" {
+        return Err(Box::new(TorbCliErrors::StackAmbiguous));
+    } else if repo == "" {
+        repo = "torb-artifacts"
+    }
+
+    let err_msg = format!("Unable to find manifest for {repo}. Make sure it was added in config.yaml and pulled with `torb artifacts refresh`");
+    let repo_manifest = manifests.get(repo).expect(&err_msg);
+
+    let stack_entry = repo_manifest.get(stack);
 
     if stack_entry.is_none() {
         if fail_not_found {
             return Err(Box::new(TorbCliErrors::ManifestInvalid));
         }
 
-        update_artifacts();
+        update_artifacts(None);
         return pull_stack(stack_name, true);
     } else {
         let torb_path = torb_path();
-        let artifacts_path = torb_path.join("torb-artifacts");
+        let repo_path = torb_path.join("repositories");
+        let artifacts_path = repo_path.join(repo);
         let stack_entry_str = stack_entry.unwrap().as_str().unwrap();
         let stack_contents = fs::read(artifacts_path.join("stacks").join(stack_entry_str))
             .map(|s| String::from_utf8(s).unwrap())?;
@@ -225,6 +358,20 @@ fn main() {
                 _ => {
                     println!("No subcommand specified.");
                 }
+            }
+        }
+        Some("artifacts") => {
+            let mut subcommand = cli_matches.subcommand_matches("artifacts").unwrap();
+            match subcommand.subcommand_name() {
+                Some("refresh") => {
+                    subcommand = subcommand.subcommand_matches("refresh").unwrap();
+                    let name_option = subcommand.value_of("name");
+                    update_artifacts(name_option);
+                }
+                Some("clone") => {
+                    clone_artifacts();
+                }
+                _ => {}
             }
         }
         Some("stack") => {
@@ -273,7 +420,8 @@ fn main() {
                             &build_artifact,
                             build_platforms_string,
                             dryrun_option.is_some(),
-                        ).expect("Unable to build required images/artifacts for nodes.");
+                        )
+                        .expect("Unable to build required images/artifacts for nodes.");
 
                         compose_build_environment(build_hash.clone(), &build_artifact);
                     }
@@ -288,9 +436,11 @@ fn main() {
                         let contents = fs::read_to_string(file_path)
                             .expect("Something went wrong reading the stack file.");
 
-                        let artifact = deserialize_stack_yaml_into_artifact(&contents).expect("Unable to read stack file into internal representation.");
-                        
-                        let (build_hash, build_filename, _) = get_build_file_info(&artifact).expect("Unable to get build file info for stack.");
+                        let artifact = deserialize_stack_yaml_into_artifact(&contents)
+                            .expect("Unable to read stack file into internal representation.");
+
+                        let (build_hash, build_filename, _) = get_build_file_info(&artifact)
+                            .expect("Unable to get build file info for stack.");
                         println!("build_filename: {}", build_filename);
                         let (_, _, build_artifact) =
                             load_build_file(build_filename).expect("Unable to load build file.");
@@ -299,14 +449,20 @@ fn main() {
                             build_hash.clone(),
                             &build_artifact,
                             dryrun_option.is_some(),
-                        ).expect("Unable to deploy required images/artifacts for nodes.");
+                        )
+                        .expect("Unable to deploy required images/artifacts for nodes.");
                     }
                 }
                 Some("list") => {
                     println!("\nTorb Stacks:\n");
-                    let stack_manifest = load_stack_manifest();
-                    for (key, _) in stack_manifest.as_mapping().unwrap().iter() {
-                        println!("- {}", key.as_str().unwrap());
+                    let stack_manifests = load_stack_manifests();
+
+                    for (repo, manifest) in stack_manifests.iter() {
+                        println!("{repo}:");
+
+                        for (key, _) in manifest.as_mapping().unwrap().iter() {
+                            println!("- {}", key.as_str().unwrap());
+                        }
                     }
                 }
                 _ => {

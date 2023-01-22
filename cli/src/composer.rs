@@ -1,12 +1,13 @@
 use crate::artifacts::{ArtifactNodeRepr, ArtifactRepr};
 use crate::resolver::inputs::{InputResolver, NO_INPUTS_FN, NO_VALUES_FN};
-use crate::utils::{buildstate_path_or_create, torb_path};
+use crate::utils::{buildstate_path_or_create, for_each_artifact_repository, torb_path, kebab_to_snake_case};
 
 use hcl::{Block, Body, Expression, Object, ObjectKey, RawExpression};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap};
 use std::fs;
 use std::path::Path;
 use thiserror::Error;
+use indexmap::IndexSet;
 
 #[derive(Error, Debug)]
 pub enum TorbComposerErrors {}
@@ -21,14 +22,6 @@ fn reserved_outputs() -> HashMap<&'static str, &'static str> {
     }
 
     reserved_hash
-}
-
-fn kebab_to_snake_case(input: &str) -> String {
-    input.replace("-", "_")
-}
-
-fn snake_case_to_kebab(input: &str) -> String {
-    input.replace("_", "-")
 }
 
 #[derive(Debug, Clone)]
@@ -86,8 +79,8 @@ impl TryFrom<&str> for InputAddress {
 
 pub struct Composer<'a> {
     hash: String,
-    build_files_seen: HashSet<String>,
-    fqn_seen: HashSet<String>,
+    build_files_seen: IndexSet<String>,
+    fqn_seen: IndexSet<String>,
     release_name: String,
     main_struct: hcl::BodyBuilder,
     artifact_repr: &'a ArtifactRepr,
@@ -95,11 +88,10 @@ pub struct Composer<'a> {
 
 impl<'a> Composer<'a> {
     pub fn new(hash: String, artifact_repr: &ArtifactRepr) -> Composer {
-
         Composer {
             hash: hash,
-            build_files_seen: HashSet::new(),
-            fqn_seen: HashSet::new(),
+            build_files_seen: IndexSet::new(),
+            fqn_seen: IndexSet::new(),
             release_name: artifact_repr.release(),
             main_struct: Body::builder(),
             artifact_repr: artifact_repr,
@@ -143,7 +135,7 @@ impl<'a> Composer<'a> {
 
         match torb_input_address.property_specifier.as_str() {
             "host" => {
-                let name = format!("{}-{}", self.release_name, output_node.name);
+                let name = format!("{}-{}", self.release_name, output_node.display_name());
 
                 let namespace = self.artifact_repr.namespace(output_node);
 
@@ -170,7 +162,7 @@ impl<'a> Composer<'a> {
         };
 
         let formatted_name = kebab_to_snake_case(&self.release_name);
-        let block_name = format!("{}_{}", formatted_name, &output_node.name);
+        let block_name = format!("{}_{}", formatted_name, &output_node.display_name());
 
         format!(
             "jsondecode(data.torb_helm_release.{}.values)[\"{}\"]",
@@ -203,31 +195,38 @@ impl<'a> Composer<'a> {
     }
 
     fn copy_supporting_build_files(&self) -> Result<(), Box<dyn std::error::Error>> {
-        let path = torb_path();
-        let supporting_build_files_path = path.join("torb-artifacts/common");
-        let buildstate_path = buildstate_path_or_create();
-        let new_environment_path = buildstate_path.join("iac_environment");
-        let dest =
-            new_environment_path.join(supporting_build_files_path.as_path().file_name().unwrap());
+        for_each_artifact_repository(Box::new(|repos_path, repo| {
+            let repo_path = repos_path.join(repo.file_name());
+            let source_path = repo_path.join("common");
+            let buildstate_path = buildstate_path_or_create();
 
-        if !dest.exists() {
-            fs::create_dir(dest.clone()).expect("Unable to create supporting buildfile directory at destination, please check torb has been initialized properly.");
-        }
+            let new_environment_path = buildstate_path.join("iac_environment");
 
-        self._copy_files_recursively(supporting_build_files_path, dest);
+            let repo_name = repo.file_name().into_string().unwrap();
+            let namespace_dir = kebab_to_snake_case(&repo_name);
+            let dest = new_environment_path
+                .join(namespace_dir)
+                .join(source_path.as_path().file_name().unwrap());
 
-        let provider_path = path.join("torb-artifacts/common/providers");
-        let dest = new_environment_path.clone();
+            if !dest.exists() {
+                fs::create_dir_all(dest.clone()).expect("Unable to create supporting buildfile directory at destination, please check torb has been initialized properly.");
+            }
 
-        self._copy_files_recursively(provider_path, dest);
+            self._copy_files_recursively(source_path, dest);
+
+            let provider_path = repo_path.join("common/providers");
+            let dest = new_environment_path.clone();
+
+            self._copy_files_recursively(provider_path, dest);
+        }))?;
 
         Ok(())
     }
 
     fn _copy_files_recursively(&self, path: std::path::PathBuf, dest: std::path::PathBuf) -> () {
-        let error_string = format!("Failed reading torb-artifacts dir: {}. Please check that torb is correctly initialized.", path.to_str().unwrap());
+        let error_string = format!("Failed reading dir: {}. Please check that torb is correctly initialized and that any additional artifact repos have been pulled with `torb artifacts refresh`.", path.to_str().unwrap());
         for entry in path.read_dir().expect(&error_string) {
-            let error_string = format!("Failed reading entry in torb-artifacts dir: {}. Please check that torb is correctly initialized.", path.to_str().unwrap());
+            let error_string = format!("Failed reading entry in dir: {}. Please check that torb is correctly initialized and that any additional artifacts repos have been pulled with `torb artifacts refresh`.", path.to_str().unwrap());
             let entry = entry.expect(&error_string);
             if entry.path().is_dir() {
                 let new_dest = dest.join(entry.path().file_name().unwrap());
@@ -314,7 +313,7 @@ impl<'a> Composer<'a> {
 
         let data_block = Block::builder("data")
             .add_label("torb_helm_release")
-            .add_label(format!("{}_{}", &snake_case_release_name, &node.name))
+            .add_label(format!("{}_{}", &snake_case_release_name, &node.display_name()))
             .add_attribute((
                 "release_name",
                 format!("{}-{}", self.release_name.clone(), node.name),
@@ -335,7 +334,19 @@ impl<'a> Composer<'a> {
     ) -> Result<bool, Box<dyn std::error::Error>> {
         let buildstate_path = buildstate_path_or_create();
         let environment_path = buildstate_path.join("iac_environment");
-        let env_node_path = environment_path.join(format!("{}_module", &node.name));
+        let node_source = node.source.clone().unwrap();
+        let namespace_dir = kebab_to_snake_case(&node_source);
+        let repo_path = environment_path.join(namespace_dir);
+
+        if !repo_path.exists() {
+            let error = format!(
+                "Failed to create new repository namespace directory in environment for revision {}.",
+                &self.hash
+            );
+            fs::create_dir(&repo_path).expect(&error);
+        }
+
+        let env_node_path = repo_path.join(format!("{}_module", &node.display_name()));
 
         if !env_node_path.exists() {
             let error = format!(
@@ -440,7 +451,10 @@ impl<'a> Composer<'a> {
         &mut self,
         node: &ArtifactNodeRepr,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let source = format!("./{}_module", node.name);
+        let node_source = node.source.clone().unwrap();
+        let namespace_dir = kebab_to_snake_case(&node_source);
+
+        let source = format!("./{namespace_dir}/{}_module", node.display_name());
         let name = node.fqn.clone().replace(".", "_");
 
         let namespace = self.artifact_repr.namespace(node);
@@ -469,7 +483,7 @@ impl<'a> Composer<'a> {
             if build_step.registry != "local" {
                 image_key_map.insert("repository".to_string(), build_step.registry);
             } else {
-                image_key_map.insert("repository".to_string(), node.name.clone());
+                image_key_map.insert("repository".to_string(), node.display_name().clone());
             }
 
             map.insert("image".to_string(), image_key_map);

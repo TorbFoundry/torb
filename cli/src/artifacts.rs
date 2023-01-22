@@ -1,14 +1,13 @@
 use crate::resolver::inputs::InputResolver;
 use crate::resolver::{NodeDependencies, StackGraph, resolve_stack};
-use crate::utils::{checksum, buildstate_path_or_create};
+use crate::utils::{checksum, buildstate_path_or_create, kebab_to_snake_case};
 use crate::composer::{InputAddress};
 
 use data_encoding::BASE32;
-use indexmap::IndexMap;
+use indexmap::{IndexMap, IndexSet};
 use serde::{Deserialize, Serialize};
 use serde_yaml::{self};
 use sha2::{Digest, Sha256};
-use std::collections::HashSet;
 use std::fs;
 use std::io::Write;
 use thiserror::Error;
@@ -60,8 +59,8 @@ pub struct ArtifactNodeRepr {
     pub outputs: Vec<String>,
     #[serde(default = "Vec::new")]
     pub dependencies: Vec<ArtifactNodeRepr>,
-    #[serde(default = "HashSet::new")]
-    pub implicit_dependency_names: HashSet<String>,
+    #[serde(default = "IndexSet::new")]
+    pub implicit_dependency_names: IndexSet<String>,
     #[serde(skip)]
     pub dependency_names: NodeDependencies,
     #[serde(default = "String::new")]
@@ -72,9 +71,15 @@ pub struct ArtifactNodeRepr {
     #[serde(default = "String::new")]
     pub values: String,
     pub namespace: Option<String>,
+    pub source: Option<String>
 }
 
 impl ArtifactNodeRepr {
+    pub fn display_name(&self) -> String {
+        kebab_to_snake_case(&self.name)
+    }
+
+    #[allow(dead_code)]
     pub fn new(
         fqn: String,
         name: String,
@@ -92,6 +97,7 @@ impl ArtifactNodeRepr {
         files: Option<Vec<String>>,
         values: String,
         namespace: Option<String>,
+        source: Option<String>
     ) -> ArtifactNodeRepr {
         ArtifactNodeRepr {
             fqn: fqn,
@@ -105,7 +111,7 @@ impl ArtifactNodeRepr {
             mapped_inputs: inputs,
             input_spec: input_spec,
             outputs: outputs,
-            implicit_dependency_names: HashSet::new(),
+            implicit_dependency_names: IndexSet::new(),
             dependencies: Vec::new(),
             dependency_names: NodeDependencies {
                 services: None,
@@ -116,7 +122,8 @@ impl ArtifactNodeRepr {
             stack_graph,
             files,
             values,
-            namespace
+            namespace,
+            source
         }
     }
 
@@ -134,7 +141,7 @@ impl ArtifactNodeRepr {
     }
 
     pub fn discover_and_set_implicit_dependencies(&mut self, graph_name: &String) -> Result<(), Box<dyn std::error::Error>> {
-        let mut implicit_deps_inputs = HashSet::new();
+        let mut implicit_deps_inputs = IndexSet::new();
 
         let inputs_fn = |_spec: &String, val: Result<InputAddress, String>| -> String {
             let fqn_option = ArtifactNodeRepr::address_to_fqn(graph_name, val);
@@ -147,7 +154,7 @@ impl ArtifactNodeRepr {
             "".to_string()
         };
 
-        let mut implicit_deps_values = HashSet::new();
+        let mut implicit_deps_values = IndexSet::new();
 
         let values_fn = |addr: Result<InputAddress, String>| -> String {
             let fqn_option = ArtifactNodeRepr::address_to_fqn(graph_name, addr);
@@ -233,13 +240,14 @@ pub struct ArtifactRepr {
     pub torb_version: String,
     pub helm_version: String,
     pub terraform_version: String,
-    pub git_commit: String,
+    pub commits: IndexMap<String, String>,
     pub stack_name: String,
     pub meta: Box<Option<ArtifactRepr>>,
     pub deploys: Vec<ArtifactNodeRepr>,
     pub nodes: IndexMap<String, ArtifactNodeRepr>,
     pub namespace: Option<String>,
-    pub release: Option<String>
+    pub release: Option<String>,
+    pub repositories: Option<Vec<String>>
 }
 
 impl ArtifactRepr {
@@ -247,23 +255,25 @@ impl ArtifactRepr {
         torb_version: String,
         helm_version: String,
         terraform_version: String,
-        git_commit: String,
+        commits: IndexMap<String, String>,
         stack_name: String,
         meta: Box<Option<ArtifactRepr>>,
         namespace: Option<String>,
         release: Option<String>,
+        repositories: Option<Vec<String>>
     ) -> ArtifactRepr {
         ArtifactRepr {
             torb_version,
             helm_version,
             terraform_version,
-            git_commit,
+            commits,
             stack_name,
             meta,
             deploys: Vec::new(),
             nodes: IndexMap::new(),
             namespace: namespace,
             release: release,
+            repositories
         }
     }
 
@@ -326,11 +336,12 @@ fn walk_graph(graph: &StackGraph) -> Result<ArtifactRepr, Box<dyn std::error::Er
         graph.version.clone(),
         graph.helm_version.clone(),
         graph.tf_version.clone(),
-        graph.commit.clone(),
+        graph.commits.clone(),
         graph.name.clone(),
         meta,
         graph.namespace.clone(),
-        graph.release.clone()
+        graph.release.clone(),
+        graph.repositories.clone()
     );
 
     let mut node_map: IndexMap<String, ArtifactNodeRepr> = IndexMap::new();
