@@ -319,6 +319,7 @@ impl Resolver {
         artifact_path: PathBuf,
         inputs: IndexMap<String, String>,
         values: serde_yaml::Value,
+        source: &str
     ) -> Result<ArtifactNodeRepr, Box<dyn Error>> {
         let services_path = artifact_path.join("services");
         let service_path = services_path.join(service_name);
@@ -332,9 +333,7 @@ impl Resolver {
             .to_string();
         node.file_path = node_fp;
 
-        if node.source.is_none() {
-            node.source = Some("torb-artifacts".to_string());
-        }
+        node.source = Some(source.to_string());
 
         node.values =
             serde_yaml::to_string(&values).expect("Unable to convert values yaml to string.");
@@ -387,6 +386,7 @@ impl Resolver {
         inputs: IndexMap<String, String>,
         build_config: Option<&Value>,
         values: serde_yaml::Value,
+        source: &str
     ) -> Result<ArtifactNodeRepr, Box<dyn Error>> {
         let projects_path = artifact_path.join("projects");
         let project_path = projects_path.join(project_name);
@@ -398,9 +398,7 @@ impl Resolver {
             .ok_or("Could not convert path to string.")?
             .to_string();
 
-        if node.source.is_none() {
-            node.source = Some("torb-artifacts".to_string());
-        }
+        node.source = Some(source.to_string());
 
         let build_step = node.build_step.or(Some(BuildStep::default())).unwrap();
         let new_build_step: BuildStep = match build_config {
@@ -486,6 +484,7 @@ impl Resolver {
                     artifacts_path,
                     inputs,
                     config_values.clone(),
+                    repo
                 )
             }
             "project" => {
@@ -504,6 +503,7 @@ impl Resolver {
                     inputs,
                     build_config,
                     config_values.clone(),
+                    repo
                 )
             }
 
