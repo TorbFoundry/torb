@@ -69,7 +69,8 @@ fn init() {
     let torb_config_template = torb_path.join("repositories/torb-artifacts/config.template.yaml");
 
     if !torb_config_path.exists() {
-        fs::copy(torb_config_template, torb_config_path).expect("Unable to copy config template file from ~/.torb/torb-artifacts/config.template.yaml. Please check that Torb has been initialized properly.");
+        let err_msg = format!("Unable to copy config template file from {}. Please check that Torb has been initialized properly.", torb_config_template.to_str().unwrap());
+        fs::copy(torb_config_template, torb_config_path).expect(&err_msg);
     }
 
     let tf_path = torb_path.join("terraform.zip");
@@ -130,6 +131,20 @@ fn checkout_stack(name: Option<&str>) {
             fs::write("./stack.yaml", "").expect("Failed to write stack.yaml");
         }
     }
+}
+
+fn new_stack() {
+    let torb_path = torb_path();
+    let repositories_path = torb_path.join("repositories");
+    let torb_artifacts = repositories_path.join("torb-artifacts");
+    let template_path = torb_artifacts.join("stack.template.yaml");
+
+    let dest = std::env::current_dir().unwrap().join("stack.template.yaml");
+
+    let source_string = template_path.to_str().unwrap();
+    let err_msg = format!("Unable to copy config template file from {source_string}. Please check that Torb has been initialized properly.");
+
+    fs::copy(template_path, dest).expect(&err_msg);
 }
 
 fn init_stack(file_path: String) {
@@ -224,15 +239,14 @@ fn update_artifacts(name: Option<&str>) {
         let repo = repo_result.unwrap();
 
         if filter_name == "" || repo.file_name() == filter_name {
-            print!(
-                "Refreshing '{}' artifact repository...",
-                repo.file_name()
+            let repo_name = repo.file_name()
                     .into_string()
-                    .expect("Failed to convert OsString to String.")
+                    .expect("Failed to convert OsString to String.");
+
+            println!(
+                "Refreshing '{}' artifact repository...",
+                repo_name
             );
-            io::stdout()
-                .flush()
-                .expect("IO buffer should have valid content.");
 
             let err_msg = format!("Failed to pull {:?}", repo.file_name());
             let artifacts_path = repo_path.join(repo.file_name());
@@ -244,7 +258,7 @@ fn update_artifacts(name: Option<&str>) {
 
             match pull_cmd_out {
                 Ok(_) => {
-                    println!("done!");
+                    println!("{repo_name} done refreshing!");
                 }
                 Err(_) => {
                     panic!("{}", err_msg);
@@ -384,6 +398,9 @@ fn main() {
                         .value_of("name");
 
                     checkout_stack(name_option);
+                }
+                Some("new") => {
+                    new_stack()
                 }
                 Some("init") => {
                     let file_path_option = subcommand
