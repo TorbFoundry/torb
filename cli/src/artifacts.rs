@@ -1,6 +1,6 @@
 use crate::resolver::inputs::InputResolver;
 use crate::resolver::{NodeDependencies, StackGraph, resolve_stack};
-use crate::utils::{checksum, buildstate_path_or_create};
+use crate::utils::{checksum, buildstate_path_or_create, kebab_to_snake_case};
 use crate::composer::{InputAddress};
 
 use data_encoding::BASE32;
@@ -75,6 +75,10 @@ pub struct ArtifactNodeRepr {
 }
 
 impl ArtifactNodeRepr {
+    pub fn display_name(&self) -> String {
+        kebab_to_snake_case(&self.name)
+    }
+
     #[allow(dead_code)]
     pub fn new(
         fqn: String,

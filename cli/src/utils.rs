@@ -19,6 +19,15 @@ pub enum TorbUtilityErrors {
 
 const TORB_PATH: &str = ".torb";
 
+pub fn kebab_to_snake_case(input: &str) -> String {
+    input.replace("-", "_")
+}
+
+#[allow(dead_code)]
+pub fn snake_case_to_kebab(input: &str) -> String {
+    input.replace("_", "-")
+}
+
 pub fn normalize_name(name: &str) -> String {
     name.to_lowercase()
         .replace("-", "_")

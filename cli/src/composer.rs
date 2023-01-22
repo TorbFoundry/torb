@@ -1,6 +1,6 @@
 use crate::artifacts::{ArtifactNodeRepr, ArtifactRepr};
 use crate::resolver::inputs::{InputResolver, NO_INPUTS_FN, NO_VALUES_FN};
-use crate::utils::{buildstate_path_or_create, for_each_artifact_repository, torb_path};
+use crate::utils::{buildstate_path_or_create, for_each_artifact_repository, torb_path, kebab_to_snake_case};
 
 use hcl::{Block, Body, Expression, Object, ObjectKey, RawExpression};
 use std::collections::{HashMap};
@@ -22,15 +22,6 @@ fn reserved_outputs() -> HashMap<&'static str, &'static str> {
     }
 
     reserved_hash
-}
-
-fn kebab_to_snake_case(input: &str) -> String {
-    input.replace("-", "_")
-}
-
-#[allow(dead_code)]
-fn snake_case_to_kebab(input: &str) -> String {
-    input.replace("_", "-")
 }
 
 #[derive(Debug, Clone)]
@@ -144,7 +135,7 @@ impl<'a> Composer<'a> {
 
         match torb_input_address.property_specifier.as_str() {
             "host" => {
-                let name = format!("{}-{}", self.release_name, output_node.name);
+                let name = format!("{}-{}", self.release_name, output_node.display_name());
 
                 let namespace = self.artifact_repr.namespace(output_node);
 
@@ -171,7 +162,7 @@ impl<'a> Composer<'a> {
         };
 
         let formatted_name = kebab_to_snake_case(&self.release_name);
-        let block_name = format!("{}_{}", formatted_name, &output_node.name);
+        let block_name = format!("{}_{}", formatted_name, &output_node.display_name());
 
         format!(
             "jsondecode(data.torb_helm_release.{}.values)[\"{}\"]",
@@ -210,9 +201,12 @@ impl<'a> Composer<'a> {
             let buildstate_path = buildstate_path_or_create();
 
             let new_environment_path = buildstate_path.join("iac_environment");
+
+            let repo_name = repo.file_name().into_string().unwrap();
+            let namespace_dir = kebab_to_snake_case(&repo_name);
             let dest = new_environment_path
-                .join(source_path.as_path().file_name().unwrap())
-                .join(repo.file_name());
+                .join(namespace_dir)
+                .join(source_path.as_path().file_name().unwrap());
 
             if !dest.exists() {
                 fs::create_dir_all(dest.clone()).expect("Unable to create supporting buildfile directory at destination, please check torb has been initialized properly.");
@@ -319,7 +313,7 @@ impl<'a> Composer<'a> {
 
         let data_block = Block::builder("data")
             .add_label("torb_helm_release")
-            .add_label(format!("{}_{}", &snake_case_release_name, &node.name))
+            .add_label(format!("{}_{}", &snake_case_release_name, &node.display_name()))
             .add_attribute((
                 "release_name",
                 format!("{}-{}", self.release_name.clone(), node.name),
@@ -340,7 +334,19 @@ impl<'a> Composer<'a> {
     ) -> Result<bool, Box<dyn std::error::Error>> {
         let buildstate_path = buildstate_path_or_create();
         let environment_path = buildstate_path.join("iac_environment");
-        let env_node_path = environment_path.join(format!("{}_module", &node.name));
+        let node_source = node.source.clone().unwrap();
+        let namespace_dir = kebab_to_snake_case(&node_source);
+        let repo_path = environment_path.join(namespace_dir);
+
+        if !repo_path.exists() {
+            let error = format!(
+                "Failed to create new repository namespace directory in environment for revision {}.",
+                &self.hash
+            );
+            fs::create_dir(&repo_path).expect(&error);
+        }
+
+        let env_node_path = repo_path.join(format!("{}_module", &node.display_name()));
 
         if !env_node_path.exists() {
             let error = format!(
@@ -445,7 +451,10 @@ impl<'a> Composer<'a> {
         &mut self,
         node: &ArtifactNodeRepr,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let source = format!("./{}_module", node.name);
+        let node_source = node.source.clone().unwrap();
+        let namespace_dir = kebab_to_snake_case(&node_source);
+
+        let source = format!("./{namespace_dir}/{}_module", node.display_name());
         let name = node.fqn.clone().replace(".", "_");
 
         let namespace = self.artifact_repr.namespace(node);
@@ -474,7 +483,7 @@ impl<'a> Composer<'a> {
             if build_step.registry != "local" {
                 image_key_map.insert("repository".to_string(), build_step.registry);
             } else {
-                image_key_map.insert("repository".to_string(), node.name.clone());
+                image_key_map.insert("repository".to_string(), node.display_name().clone());
             }
 
             map.insert("image".to_string(), image_key_map);
