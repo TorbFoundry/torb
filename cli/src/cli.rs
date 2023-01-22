@@ -80,6 +80,10 @@ pub fn cli() -> Command<'static> {
                         ),
                 )
                 .subcommand(
+                    SubCommand::with_name("new")
+                        .about("Create a new stack.yaml template.")
+                )
+                .subcommand(
                     SubCommand::with_name("build")
                         .about("Build a stack from a stack definition file.")
                         .arg(
