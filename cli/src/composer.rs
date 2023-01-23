@@ -539,15 +539,21 @@ impl<'a> Composer<'a> {
 
         let (mapped_values, _) = InputResolver::resolve(node, Some(resolver_fn), NO_INPUTS_FN)?;
 
-        values.push(mapped_values.expect("Unable to resolve values field."));
+
+        if mapped_values.clone().unwrap() != "---\n~\n" {
+            values.push(mapped_values.expect("Unable to resolve values field."));
+        }
 
         let mut builder = std::mem::take(&mut self.main_struct);
 
         let mut block = Block::builder("module")
                 .add_label(&name)
                 .add_attributes(attributes)
-                .add_attribute(("values", values))
                 .add_attribute(("inputs", inputs));
+
+        if !values.is_empty() {
+            block = block.add_attribute(("values", values));
+        }
 
         if !depends_on_exprs.is_empty() {
             let depends_on = Expression::from(depends_on_exprs);
