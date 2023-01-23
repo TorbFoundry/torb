@@ -60,7 +60,7 @@ pub struct ArtifactNodeRepr {
     #[serde(default = "Vec::new")]
     pub dependencies: Vec<ArtifactNodeRepr>,
     #[serde(default = "IndexSet::new")]
-    pub implicit_dependency_names: IndexSet<String>,
+    pub implicit_dependency_fqns: IndexSet<String>,
     #[serde(skip)]
     pub dependency_names: NodeDependencies,
     #[serde(default = "String::new")]
@@ -111,7 +111,7 @@ impl ArtifactNodeRepr {
             mapped_inputs: inputs,
             input_spec: input_spec,
             outputs: outputs,
-            implicit_dependency_names: IndexSet::new(),
+            implicit_dependency_fqns: IndexSet::new(),
             dependencies: Vec::new(),
             dependency_names: NodeDependencies {
                 services: None,
@@ -171,7 +171,7 @@ impl ArtifactNodeRepr {
 
         let unioned_deps = implicit_deps_inputs.union(&mut implicit_deps_values);
 
-        self.implicit_dependency_names = unioned_deps.cloned().collect();
+        self.implicit_dependency_fqns = unioned_deps.cloned().collect();
 
         Ok(())
     }
@@ -370,7 +370,7 @@ pub fn stack_into_artifact(meta: &Box<Option<ArtifactNodeRepr>>) -> Result<Box<O
 fn walk_nodes(node: &ArtifactNodeRepr, graph: &StackGraph, node_map: &mut IndexMap<String, ArtifactNodeRepr>) -> ArtifactNodeRepr {
     let mut new_node = node.clone();
 
-    for fqn in new_node.implicit_dependency_names.iter() {
+    for fqn in new_node.implicit_dependency_fqns.iter() {
         let kind = fqn.split(".").collect::<Vec<&str>>()[1];
         let node = match kind {
             "project" => graph.projects.get(fqn).unwrap(),
@@ -388,7 +388,7 @@ fn walk_nodes(node: &ArtifactNodeRepr, graph: &StackGraph, node_map: &mut IndexM
         for project in projects {
             let p_fqn = format!("{}.project.{}", graph.name.clone(), project.clone());
 
-            if !new_node.implicit_dependency_names.contains(&p_fqn) {
+            if !new_node.implicit_dependency_fqns.contains(&p_fqn) {
                 let p_node = graph.projects.get(&p_fqn).unwrap();
                 let p_node_repr = walk_nodes(p_node, graph, node_map);
 
@@ -401,7 +401,7 @@ fn walk_nodes(node: &ArtifactNodeRepr, graph: &StackGraph, node_map: &mut IndexM
         for service in services {
             let s_fqn = format!("{}.service.{}", graph.name.clone(), service.clone());
 
-            if !new_node.implicit_dependency_names.contains(&s_fqn) {
+            if !new_node.implicit_dependency_fqns.contains(&s_fqn) {
                 let s_node = graph.services.get(&s_fqn).unwrap();
                 let s_node_repr = walk_nodes(s_node, graph, node_map);
 

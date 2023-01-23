@@ -319,7 +319,8 @@ impl Resolver {
         artifact_path: PathBuf,
         inputs: IndexMap<String, String>,
         values: serde_yaml::Value,
-        source: &str
+        source: &str,
+        namespace: Option<String>
     ) -> Result<ArtifactNodeRepr, Box<dyn Error>> {
         let services_path = artifact_path.join("services");
         let service_path = services_path.join(service_name);
@@ -334,6 +335,7 @@ impl Resolver {
         node.file_path = node_fp;
 
         node.source = Some(source.to_string());
+        node.namespace = namespace;
 
         node.values =
             serde_yaml::to_string(&values).expect("Unable to convert values yaml to string.");
@@ -386,7 +388,8 @@ impl Resolver {
         inputs: IndexMap<String, String>,
         build_config: Option<&Value>,
         values: serde_yaml::Value,
-        source: &str
+        source: &str,
+        namespace: Option<String>
     ) -> Result<ArtifactNodeRepr, Box<dyn Error>> {
         let projects_path = artifact_path.join("projects");
         let project_path = projects_path.join(project_name);
@@ -399,6 +402,7 @@ impl Resolver {
             .to_string();
 
         node.source = Some(source.to_string());
+        node.namespace = namespace;
 
         let build_step = node.build_step.or(Some(BuildStep::default())).unwrap();
         let new_build_step: BuildStep = match build_config {
@@ -476,6 +480,10 @@ impl Resolver {
                     .as_str()
                     .expect("Unable to parse service name.");
 
+                let service_namespace = yaml.get("namespace").map(|x| {
+                    x.as_str().unwrap().to_string()
+                });
+
                 self.resolve_service(
                     stack_name,
                     stack_kind_name,
@@ -484,7 +492,8 @@ impl Resolver {
                     artifacts_path,
                     inputs,
                     config_values.clone(),
-                    repo
+                    repo,
+                    service_namespace
                 )
             }
             "project" => {
@@ -494,6 +503,11 @@ impl Resolver {
                     .as_str()
                     .expect("Unable to parse project name.");
                 let build_config = yaml.get("build");
+
+                let project_namespace = yaml.get("namespace").map(|x| {
+                    x.as_str().unwrap().to_string()
+                });
+
                 self.resolve_project(
                     stack_name,
                     stack_kind_name,
@@ -503,7 +517,8 @@ impl Resolver {
                     inputs,
                     build_config,
                     config_values.clone(),
-                    repo
+                    repo,
+                    project_namespace
                 )
             }
 

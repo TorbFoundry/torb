@@ -13,7 +13,7 @@ use indexmap::IndexMap;
 use rayon::prelude::*;
 use std::fs;
 use std::fs::File;
-use std::io::{self, Write};
+use std::io::{self};
 use std::process::Command;
 use thiserror::Error;
 use ureq;

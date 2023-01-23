@@ -507,6 +507,17 @@ impl<'a> Composer<'a> {
             attributes.push(("chart_name", local_path.to_str().unwrap().to_string()));
         }
 
+        let mut depends_on_exprs = vec![];
+
+        for dep in node.dependencies.iter() {
+            let dep_fqn = &dep.fqn;
+
+            if node.implicit_dependency_fqns.get(dep_fqn).is_none() {
+                let dep_fqn_name = dep_fqn.clone().replace(".", "_");
+                depends_on_exprs.push(RawExpression::from(format!("module.{dep_fqn_name}")))
+            }
+        }
+
         let module_version = node.deploy_steps["helm"]
             .clone()
             .unwrap()
@@ -528,19 +539,24 @@ impl<'a> Composer<'a> {
 
         let (mapped_values, _) = InputResolver::resolve(node, Some(resolver_fn), NO_INPUTS_FN)?;
 
-        // println!("{:?}", mapped_values);
-
         values.push(mapped_values.expect("Unable to resolve values field."));
 
         let mut builder = std::mem::take(&mut self.main_struct);
 
-        builder = builder.add_block(
-            Block::builder("module")
+        let mut block = Block::builder("module")
                 .add_label(&name)
                 .add_attributes(attributes)
                 .add_attribute(("values", values))
-                .add_attribute(("inputs", inputs))
-                .build(),
+                .add_attribute(("inputs", inputs));
+
+        if !depends_on_exprs.is_empty() {
+            let depends_on = Expression::from(depends_on_exprs);
+
+            block = block.add_attribute(("depends_on", depends_on));
+        }
+
+        builder = builder.add_block(
+            block.build()
         );
 
         builder = builder.add_block(output_block);
