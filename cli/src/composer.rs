@@ -1,13 +1,15 @@
 use crate::artifacts::{ArtifactNodeRepr, ArtifactRepr};
-use crate::resolver::inputs::{InputResolver, NO_INPUTS_FN, NO_VALUES_FN};
+use crate::resolver::inputs::{InputResolver, NO_INPUTS_FN, NO_VALUES_FN, NO_INITS_FN};
 use crate::utils::{buildstate_path_or_create, for_each_artifact_repository, torb_path, kebab_to_snake_case};
 
 use hcl::{Block, Body, Expression, Object, ObjectKey, RawExpression};
-use std::collections::{HashMap};
+use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 use thiserror::Error;
 use indexmap::IndexSet;
+use once_cell::sync::Lazy;
 
 #[derive(Error, Debug)]
 pub enum TorbComposerErrors {}
@@ -24,7 +26,7 @@ fn reserved_outputs() -> HashMap<&'static str, &'static str> {
     reserved_hash
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InputAddress {
     pub locality: String,
     pub node_type: String,
@@ -33,7 +35,7 @@ pub struct InputAddress {
     pub property_specifier: String,
 }
 
-impl InputAddress {
+impl<'a> InputAddress {
     fn new(
         locality: String,
         node_type: String,
@@ -49,6 +51,53 @@ impl InputAddress {
             property_specifier,
         }
     }
+
+    fn is_init_address(vals: Vec<&str>) -> Option<InputAddress> {
+        if vals.len() == 3 && vals[0] == "TORB" {
+            let locality = vals[0].to_string();
+            let node_type = "".to_string();
+            let node_name = "".to_string();
+            let node_property = vals[1].to_string();
+            let property_specifier = vals[2].to_string();
+
+            return Some(InputAddress::new(
+                locality,
+                node_type,
+                node_name,
+                node_property,
+                property_specifier
+            ))
+        }
+
+        None
+    }
+
+    fn is_input_address(vals: Vec<&str>) -> Option<InputAddress> {
+        if vals.len() == 5 && vals[0] == "self" {
+            let locality = vals[0].to_string();
+            let node_type = vals[1].to_string();
+            let node_name = vals[2].to_string();
+            let node_property = vals[3].to_string();
+            let property_specifier = vals[4].to_string();
+
+            return Some(InputAddress::new(
+                locality,
+                node_type,
+                node_name,
+                node_property,
+                property_specifier,
+            ))
+        } 
+
+        None
+    }
+
+    fn supported_localities() -> HashSet<&'a str> {
+        let set = vec!["self", "TORB"];
+
+        set.into_iter().collect::<HashSet<&'a str>>()
+    }
+
 }
 
 impl TryFrom<&str> for InputAddress {
@@ -57,23 +106,23 @@ impl TryFrom<&str> for InputAddress {
     fn try_from(input: &str) -> Result<Self, String> {
         let vals = input.split(".").collect::<Vec<&str>>();
 
-        if vals.len() == 5 {
-            let locality = vals[0].to_string();
-            let node_type = vals[1].to_string();
-            let node_name = vals[2].to_string();
-            let node_property = vals[3].to_string();
-            let property_specifier = vals[4].to_string();
-
-            Ok(InputAddress::new(
-                locality,
-                node_type,
-                node_name,
-                node_property,
-                property_specifier,
-            ))
-        } else {
-            Err(input.to_string())
+        if !InputAddress::supported_localities().contains(vals[0]) {
+            return Err(input.to_string())
         }
+
+        let init_addr_opt = InputAddress::is_init_address(vals);
+
+        if init_addr_opt.is_some() {
+            return Ok(init_addr_opt.unwrap())
+        }
+
+        let input_addr_opt = InputAddress::is_input_address(vals);
+
+        if input_addr_opt.is_some() {
+            return Ok(input_addr_opt.unwrap())
+        }
+
+        Err(input.to_string())
     }
 }
 
@@ -397,7 +446,7 @@ impl<'a> Composer<'a> {
             mapped_expression.clone().to_string()
         };
 
-        let (_, _) = InputResolver::resolve(node, NO_VALUES_FN, Some(resolver_fn))
+        let (_, _, _) = InputResolver::resolve(node, NO_VALUES_FN, Some(resolver_fn), NO_INITS_FN)
             .expect("Unable to resolve listed inputs.");
 
         input_vals
@@ -430,7 +479,7 @@ impl<'a> Composer<'a> {
                         "torb",
                         Expression::from_iter(vec![
                             ("source", "TorbFoundry/torb"),
-                            ("version", "0.1.1"),
+                            ("version", "0.1.2"),
                         ]),
                     ))
                     .build(),
@@ -537,7 +586,7 @@ impl<'a> Composer<'a> {
             self.interpolate_inputs_into_helm_values(address)
         };
 
-        let (mapped_values, _) = InputResolver::resolve(node, Some(resolver_fn), NO_INPUTS_FN)?;
+        let (mapped_values, _, _) = InputResolver::resolve(node, Some(resolver_fn), NO_INPUTS_FN, NO_INITS_FN)?;
 
 
         if mapped_values.clone().unwrap() != "---\n~\n" {

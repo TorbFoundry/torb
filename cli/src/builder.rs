@@ -144,7 +144,7 @@ impl<'a> StackBuilder<'a> {
 
             let script_string = lines.join(";");
 
-            run_command_in_user_shell(script_string).map_err(|err| {
+            run_command_in_user_shell(script_string, None).map_err(|err| {
                 TorbBuilderErrors::UnableToBuildBuildScript {
                     response: err.to_string(),
                 }

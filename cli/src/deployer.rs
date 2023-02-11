@@ -52,6 +52,7 @@ impl StackDeployer {
         let mut cmd = Command::new("./terraform");
         cmd.arg(format!("-chdir={}", iac_env_path.to_str().unwrap()));
         cmd.arg("init");
+        cmd.arg("-upgrade");
         cmd.current_dir(torb_path);
 
         println!("Running command: {:?}", cmd);
