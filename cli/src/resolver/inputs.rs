@@ -9,11 +9,11 @@ const INIT_TOKEN: &str = "TORB";
 #[derive(Error, Debug)]
 pub enum TorbInputResolverErrors {}
 
-pub const NO_INPUTS_FN: Option<Box<dyn FnMut(&String, Result<InputAddress, String>) -> String>> =
-    None::<Box<dyn FnMut(&String, Result<InputAddress, String>) -> String>>;
+pub const NO_INPUTS_FN: Option<Box<dyn FnMut(&String, Result<InputAddress, TorbInput>) -> String>> =
+    None::<Box<dyn FnMut(&String, Result<InputAddress, TorbInput>) -> String>>;
 
-pub const NO_VALUES_FN: Option<Box<dyn FnMut(Result<InputAddress, String>) -> String>> =
-    None::<Box<dyn FnMut(Result<InputAddress, String>) -> String>>;
+pub const NO_VALUES_FN: Option<Box<dyn FnMut(Result<InputAddress, TorbInput>) -> String>> =
+    None::<Box<dyn FnMut(Result<InputAddress, TorbInput>) -> String>>;
 
 pub const NO_INITS_FN: Option<bool> = None;
 
@@ -32,8 +32,8 @@ impl<'a, F, U> InputResolver<'a, F, U> {
         inits_fn: Option<bool>,
     ) -> Result<(Option<String>, Option<Vec<(String, String)>>, Option<Vec<String>>), Box<dyn std::error::Error>>
     where
-        F: FnMut(Result<InputAddress, String>) -> String,
-        U: FnMut(&String, Result<InputAddress, String>) -> String,
+        F: FnMut(Result<InputAddress, TorbInput>) -> String,
+        U: FnMut(&String, Result<InputAddress, TorbInput>) -> String,
     {
         let mut resolver = InputResolver {
             node: node,
@@ -65,15 +65,15 @@ impl<'a, F, U> InputResolver<'a, F, U> {
 
     fn resolve_inputs_in_mapped_inputs(&mut self) -> Vec<(String, String)>
     where
-        U: FnMut(&String, Result<InputAddress, String>) -> String,
+        U: FnMut(&String, Result<InputAddress, TorbInput>) -> String,
     {
+        println!("Abracadabra!");
         let f = self.inputs_fn.as_mut().unwrap();
 
         let mut out: Vec<(String, String)> = vec![];
 
         for (_, (spec, value)) in self.node.mapped_inputs.iter() {
-            let TorbInput::String(value) = value;
-            let input_address_result = InputAddress::try_from(value.as_str());
+            let input_address_result = InputAddress::try_from(value);
 
             let res = f(&spec.clone(), input_address_result.clone());
 
@@ -85,7 +85,7 @@ impl<'a, F, U> InputResolver<'a, F, U> {
 
 
     pub fn resolve_node_init_script_inputs(&mut self) -> Vec<String> {
-        let Some(steps) = self.node.init_step.clone();
+        let steps = self.node.init_step.clone().unwrap();
         steps.iter().map(|step| {
             self.resolve_torb_value_interpolation(step)
         }).collect::<Vec<String>>()
@@ -106,21 +106,21 @@ impl<'a, F, U> InputResolver<'a, F, U> {
                 end = script_step.split_at(start).1.find("/").unwrap_or(end);
 
                 let remaining = if start == 0 && end == script_step.len() {
-                    let (typing, resolved_token) = self.resolve_inputs_in_init_step(script_step.to_string());
-                    let serialized_token = resolved_token.serialize_for_init(typing);
+                    let resolved_token = self.resolve_inputs_in_init_step(script_step.to_string());
+                    let serialized_token = resolved_token.serialize_for_init();
 
                     serialized_token
                 } else if end == script_step.len() {
                     let parts = script_step.split_at(start);
-                    let (typing, resolved_token) = self.resolve_inputs_in_init_step(parts.1.to_string());
+                    let resolved_token = self.resolve_inputs_in_init_step(parts.1.to_string());
                     let remaining = parts.0.to_string();
-                    let serialized_token = resolved_token.serialize_for_init(typing);
+                    let serialized_token = resolved_token.serialize_for_init();
 
                     format!("{}{}", remaining, serialized_token)
                 } else if start == 0 {
                     let parts = script_step.split_at(end);
-                    let (typing, resolved_token) = self.resolve_inputs_in_init_step(parts.0.to_string());
-                    let serialized_token = resolved_token.serialize_for_init(typing);
+                    let resolved_token = self.resolve_inputs_in_init_step(parts.0.to_string());
+                    let serialized_token = resolved_token.serialize_for_init();
                     let remaining = parts.1.to_string();
                     format!("{}{}", serialized_token, remaining)
                 } else {
@@ -130,9 +130,9 @@ impl<'a, F, U> InputResolver<'a, F, U> {
                     let token = parts.0.to_string();
                     let remaining_2 = parts.1.to_string();
 
-                    let (typing, resolved_token) = self.resolve_inputs_in_init_step(token);
+                    let resolved_token = self.resolve_inputs_in_init_step(token);
 
-                    let serialized_token = resolved_token.serialize_for_init(typing);
+                    let serialized_token = resolved_token.serialize_for_init();
                     format!("{}{}{}", remaining_1, serialized_token, remaining_2)
                 };
 
@@ -144,29 +144,29 @@ impl<'a, F, U> InputResolver<'a, F, U> {
         }
     }
 
-    pub fn resolve_inputs_in_init_step(&mut self, token: String) -> (String, TorbInput)
+    pub fn resolve_inputs_in_init_step(&mut self, token: String) -> TorbInput
     {
         let input = token.split("TORB.inputs.").collect::<Vec<&str>>()[1];
 
-        let (typing, val) = self.node.mapped_inputs.get(input).unwrap();
+        let (_, val) = self.node.mapped_inputs.get(input).unwrap();
 
-        (typing.clone(), val.clone())
+        val.clone()
     }
 
     pub fn resolve_inputs_in_values(&mut self) -> String
     where
-        F: FnMut(Result<InputAddress, String>) -> String,
+        F: FnMut(Result<InputAddress, TorbInput>) -> String,
     {
         let yaml_str = self.node.values.as_str();
         let serde_value: Value = serde_yaml::from_str(yaml_str).unwrap_or(Value::Null);
         let resolved_values = self.resolve_inputs_in_helm_values(&serde_value);
 
-        serde_yaml::to_string(&resolved_values).expect("Unable to convet value to string in resolver.")
+        serde_yaml::to_string(&resolved_values).expect("Unable to convert value to string in resolver.")
     }
 
     fn resolve_inputs_in_helm_values(&mut self, value: &Value) -> Value
     where
-        F: FnMut(Result<InputAddress, String>) -> String,
+        F: FnMut(Result<InputAddress, TorbInput>) -> String,
     {
         let f = self.values_fn.as_mut().unwrap();
 

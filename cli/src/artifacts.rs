@@ -7,6 +7,7 @@ use data_encoding::BASE32;
 use indexmap::{IndexMap, IndexSet};
 use memorable_wordlist;
 use once_cell::sync::Lazy;
+use serde::ser::SerializeSeq;
 use serde::{de, de::SeqAccess, de::Visitor, Deserialize, Deserializer, Serialize};
 use serde_yaml::{self};
 use sha2::{Digest, Sha256};
@@ -18,12 +19,6 @@ use thiserror::Error;
 pub enum TorbArtifactErrors {
     #[error("Hash of loaded build file does not match hash of file on disk.")]
     LoadChecksumFailed,
-}
-
-#[derive(Error, Debug)]
-pub enum TorbInputErrors {
-    #[error("TorbInput value requested is not a(n) {requested:?} type is a(n) {actual:?}")]
-    IncorrectTorbInputType { requested: String, actual: String },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -52,16 +47,16 @@ pub static TYPES: Lazy<IndexSet<&str>> = Lazy::new(get_types);
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum TorbNumeric {
     Int(u64),
+    NegInt(i64),
     Float(f64),
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Debug, Clone)]
 pub enum TorbInput {
     Bool(bool),
     Array(Vec<TorbInput>),
     String(String),
     Numeric(TorbNumeric),
-    Address(InputAddress)
 }
 
 impl From<bool> for TorbInput {
@@ -73,6 +68,14 @@ impl From<bool> for TorbInput {
 impl From<u64> for TorbInput {
     fn from(value: u64) -> Self {
         let wrapper = TorbNumeric::Int(value);
+
+        TorbInput::Numeric(wrapper)
+    }
+}
+
+impl From<i64> for TorbInput {
+    fn from(value: i64) -> Self {
+        let wrapper = TorbNumeric::NegInt(value);
 
         TorbInput::Numeric(wrapper)
     }
@@ -92,9 +95,17 @@ impl From<String> for TorbInput {
     }
 }
 
-impl<T> From<Vec<T>> for TorbInput 
-where TorbInput: From<T>,
-    T: Clone
+impl From<&str> for TorbInput {
+    fn from(value: &str) -> Self {
+        TorbInput::String(value.to_string())
+    }
+}
+
+
+impl<T> From<Vec<T>> for TorbInput
+where
+    TorbInput: From<T>,
+    T: Clone,
 {
     fn from(value: Vec<T>) -> Self {
         let mut new_vec = Vec::<TorbInput>::new();
@@ -107,91 +118,17 @@ where TorbInput: From<T>,
     }
 }
 
-
 impl TorbInput {
-    fn input_type(&self) -> String {
-        match self {
-            TorbInput::Bool(_) => "bool".to_string(),
-            TorbInput::Array(_) => "array".to_string(),
-            TorbInput::String(_) => "string".to_string(),
-            TorbInput::Numeric(_) => "numeric".to_string(),
-            TorbInput::Address(_) => "address".to_string()
-        }
-    }
+    pub fn serialize_for_init(&self) -> String {
 
-    pub fn serialize_for_init(&self, expected_type: String) -> String {
-        let serde_val = serde_json::json!(self);
-
-        let serialized_type = match serde_val {
-            serde_json::Value::Array(_) => {
-                "array"
-            },
-            serde_json::Value::Bool(_) => {
-                "bool"
-            },
-            serde_json::Value::Number(_) => {
-                "numeric"
-            },
-            serde_json::Value::String(_) => {
-                "string"
-            },
-            serde_json::Value::Null => {
-                "invalid"
-            },
-            serde_json::Value::Object(_) => {
-                "invalid"
-            }
-        };
-
-        if expected_type != serialized_type {
-            panic!("Serialzed type doesn't match expected type.")
-        }
+        let serde_val = serde_json::to_string(self).unwrap();
 
         serde_json::to_string(&serde_val).expect("Unable to serialize TorbInput to JSON, this is a bug and should be reported to the project maintainer(s).")
     }
 
-    fn bool_value(&self) -> Result<bool, Box<dyn std::error::Error>> {
-        if self.input_type() == "bool" {
-            let TorbInput::Bool(val) = self;
-
-            Ok(val.clone())
-        } else {
-            Err(Box::new(TorbInputErrors::IncorrectTorbInputType { requested: "bool".to_string(), actual: self.input_type() }))
-        }
-    }
-
-    fn array_value(&self) -> Result<bool, Box<dyn std::error::Error>> {
-        if self.input_type() == "array" {
-            let TorbInput::Bool(val) = self;
-
-            Ok(val.clone())
-        } else {
-            Err(Box::new(TorbInputErrors::IncorrectTorbInputType { requested: "array".to_string(), actual: self.input_type() }))
-        }
-    }
-
-    fn string_value(&self) -> Result<String, Box<dyn std::error::Error>> {
-        if self.input_type() == "string" {
-            let TorbInput::String(val) = self;
-
-            Ok(val.clone())
-        } else {
-            Err(Box::new(TorbInputErrors::IncorrectTorbInputType { requested: "string".to_string(), actual: self.input_type() }))
-        }
-    }
-
-    fn numeric_value(&self) -> Result<TorbNumeric, Box<dyn std::error::Error>> {
-        if self.input_type() == "string" {
-            let TorbInput::Numeric(val) = self;
-
-            Ok(val.clone())
-        } else {
-            Err(Box::new(TorbInputErrors::IncorrectTorbInputType { requested: "numeric".to_string(), actual: self.input_type() }))
-        }
-    }
 }
 
-#[derive(Serialize, Debug, Clone)]
+#[derive(Debug, Clone)]
 pub struct TorbInputSpec {
     typing: String,
     default: TorbInput,
@@ -235,6 +172,167 @@ pub struct ArtifactNodeRepr {
     pub source: Option<String>,
 }
 
+struct TorbInputDeserializer;
+impl<'de> Visitor<'de> for TorbInputDeserializer {
+    type Value = TorbInput;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        formatter.write_str("a numeric value.")
+    }
+
+    fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+        where
+            A: SeqAccess<'de>, {
+        let mut container = Vec::<TorbInput>::new();
+
+        loop {
+            let val_opt: Option<serde_yaml::Value> = seq.next_element()?;
+
+            if val_opt.is_some() {
+                let value = val_opt.unwrap();
+
+                let input = match value {
+                    serde_yaml::Value::String(val) => {
+                        TorbInput::String(val)
+                    }
+                    serde_yaml::Value::Bool(val) => {
+                        TorbInput::Bool(val)
+                    },
+                    serde_yaml::Value::Number(val) => {
+                        if val.is_f64() {
+                            TorbInput::Numeric(TorbNumeric::Float(val.as_f64().unwrap()))
+                        } else if val.is_u64() {
+                            TorbInput::Numeric(TorbNumeric::Int(val.as_u64().unwrap()))
+                        } else {
+                            TorbInput::Numeric(TorbNumeric::NegInt(val.as_i64().unwrap()))
+                        }
+                    },
+                    serde_yaml::Value::Null => {
+                        panic!("Null values not acceptable as element in type Array.")
+                    },
+                    serde_yaml::Value::Sequence(_) => {
+                        panic!("Nested Array types are not currently supported.")
+                    }
+                    serde_yaml::Value::Mapping(_val) => {
+                        panic!("Map types are not currently supported as array elements. (Or at all.)")
+                    }
+                };
+
+                container.push(input);
+            } else {
+                break;
+            }
+        }
+
+        let input = TorbInput::Array(container);
+
+        Ok(input)
+    }
+
+    fn visit_f32<E>(self, v: f32) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        Ok(TorbInput::Numeric(TorbNumeric::Float(v.into())))
+    }
+
+    fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        Ok(TorbInput::String(v.to_string()))
+    }
+
+    fn visit_string<E>(self, v: String) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        Ok(TorbInput::String(v))
+    }
+
+    fn visit_bool<E>(self, v: bool) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        Ok(TorbInput::Bool(v))
+    }
+
+    fn visit_f64<E>(self, v: f64) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        Ok(TorbInput::Numeric(TorbNumeric::Float(v.into())))
+    }
+
+    fn visit_u64<E>(self, v: u64) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        Ok(TorbInput::Numeric(TorbNumeric::Int(v.into())))
+    }
+    fn visit_u32<E>(self, v: u32) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        Ok(TorbInput::Numeric(TorbNumeric::Int(v.into())))
+    }
+    fn visit_u16<E>(self, v: u16) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        Ok(TorbInput::Numeric(TorbNumeric::Int(v.into())))
+    }
+
+    fn visit_u8<E>(self, v: u8) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        Ok(TorbInput::Numeric(TorbNumeric::Int(v.into())))
+    }
+
+    fn visit_i8<E>(self, v: i8) -> Result<Self::Value, E>
+        where
+            E: de::Error, {
+        if v > 0 {
+            panic!("Only for negatives.")
+        }
+        Ok(TorbInput::Numeric(TorbNumeric::NegInt(v.into())))
+    }
+    fn visit_i16<E>(self, v: i16) -> Result<Self::Value, E>
+        where
+            E: de::Error, {
+        if v > 0 {
+            panic!("Only for negatives.")
+        }
+        Ok(TorbInput::Numeric(TorbNumeric::NegInt(v.into())))
+    }
+    fn visit_i32<E>(self, v: i32) -> Result<Self::Value, E>
+        where
+            E: de::Error, {
+        if v > 0 {
+            panic!("Only for negatives.")
+        }
+        Ok(TorbInput::Numeric(TorbNumeric::NegInt(v.into())))
+    }
+    fn visit_i64<E>(self, v: i64) -> Result<Self::Value, E>
+        where
+            E: de::Error, {
+        if v > 0 {
+            panic!("Only for negatives.")
+        }
+        Ok(TorbInput::Numeric(TorbNumeric::NegInt(v.into())))
+    }
+}
+
+impl<'de> Deserialize<'de> for TorbInput {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_any(TorbInputDeserializer)
+    }
+}
+
 struct TorbInputSpecDeserializer;
 impl<'de> Visitor<'de> for TorbInputSpecDeserializer {
     type Value = TorbInputSpec;
@@ -262,7 +360,6 @@ impl<'de> Visitor<'de> for TorbInputSpecDeserializer {
     where
         A: SeqAccess<'de>,
     {
-        println!("HERE SEQ");
         let mut count = 0;
         let mut typing = String::new();
         let mut mapping = String::new();
@@ -326,13 +423,53 @@ impl<'de> Visitor<'de> for TorbInputSpecDeserializer {
                             default = TorbInput::String(value);
                         }
                         "array" => {
-                            default = TorbInput::String(String::new());
+                            let value = seq.next_element::<serde_yaml::Sequence>()?.unwrap();
+
+                            let mut new_vec = Vec::<TorbInput>::new();
+
+                            for ele in value.iter() {
+                                match ele {
+                                    serde_yaml::Value::Bool(val) => {
+                                        new_vec.push(TorbInput::Bool(val.clone()))
+                                    }
+                                    serde_yaml::Value::Number(val) => {
+                                        let numeric = if val.is_f64() {
+                                            TorbNumeric::Float(val.as_f64().unwrap())
+                                        } else if val.is_u64() {
+                                            TorbNumeric::Int(val.as_u64().unwrap())
+                                        } else {
+                                            TorbNumeric::NegInt(val.as_i64().unwrap())
+                                        };
+
+                                        new_vec.push(TorbInput::Numeric(numeric))
+                                    }
+                                    serde_yaml::Value::String(val) => {
+                                        new_vec.push(TorbInput::String(val.clone()))
+                                    }
+                                    _ => panic!("Typing was array, array elements are not a supported type. Supported array types are bool, numeric and string. Nesting is not supported.")
+                                }
+                            }
+
+                            default = TorbInput::Array(new_vec);
                         }
                         "numeric" => {
-                            default = TorbInput::String(String::new());
+                            let value = seq.next_element::<serde_yaml::Value>()?.unwrap();
+                            if let serde_yaml::Value::Number(val) = value {
+                                let numeric = if val.is_f64() {
+                                    TorbNumeric::Float(val.as_f64().unwrap())
+                                } else if val.is_u64() {
+                                    TorbNumeric::Int(val.as_u64().unwrap())
+                                } else {
+                                    TorbNumeric::NegInt(val.as_i64().unwrap())
+                                };
+                                default = TorbInput::Numeric(numeric);
+                            } else {
+                                panic!("Typing was numeric, default value was not numeric.")
+                            }
+
                         }
                         _ => {
-                            default = TorbInput::String(String::new());
+                            panic!("Type not supported by Torb! Supported types are String, Numeric, Array, Bool.")
                         }
                     }
                     count += 1;
@@ -365,6 +502,7 @@ impl<'de> Visitor<'de> for TorbInputSpecDeserializer {
             default,
         };
 
+        println!("Finishing");
         Ok(new_obj)
     }
 }
@@ -375,6 +513,78 @@ impl<'de> Deserialize<'de> for TorbInputSpec {
         D: Deserializer<'de>,
     {
         deserializer.deserialize_any(TorbInputSpecDeserializer)
+    }
+}
+
+impl Serialize for TorbInput {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: serde::Serializer {
+        
+        match self {
+            TorbInput::Numeric(val) => {
+                match val {
+                    TorbNumeric::Float(val) => {
+                        serializer.serialize_f64(val.clone())
+                    },
+                    TorbNumeric::Int(val) => {
+                        serializer.serialize_u64(val.clone())
+                    },
+                    TorbNumeric::NegInt(val) => {
+                        serializer.serialize_i64(val.clone())
+                    }
+                }
+            },
+            TorbInput::Array(val) => {
+                let len = val.len();
+                let mut seq = serializer.serialize_seq(Some(len))?;
+
+                for input in val.iter().cloned() {
+                    let expr = match input {
+                        TorbInput::String(val) => serde_yaml::Value::String(val),
+                        TorbInput::Bool(val) => serde_yaml::Value::Bool(val),
+                        TorbInput::Numeric(val) => {
+                            match val {
+                                TorbNumeric::Float(val) => serde_yaml::Value::Number(serde_yaml::Number::from(val)),
+                                TorbNumeric::Int(val) => serde_yaml::Value::Number(serde_yaml::Number::from(val)),
+                                TorbNumeric::NegInt(val) => serde_yaml::Value::Number(serde_yaml::Number::from(val))
+                            }
+                        }
+                        TorbInput::Array(_val) => {
+                            panic!("Nested array types are not supported.")
+                        }
+                    };
+
+                    seq.serialize_element(&expr)?;
+                }
+                seq.end()
+            },
+            TorbInput::String(val) => {
+                serializer.serialize_str(val)
+            },
+            TorbInput::Bool(val) => {
+                serializer.serialize_bool(val.clone())
+            }
+        }
+
+    }
+}
+
+impl Serialize for TorbInputSpec {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: serde::Serializer {
+        let mut seq = serializer.serialize_seq(Some(3))?;
+
+        let typing = self.typing.clone();
+        let default = self.default.clone();
+        let mapping = self.mapping.clone();
+
+        seq.serialize_element(&typing)?;
+        seq.serialize_element(&default)?;
+        seq.serialize_element(&mapping)?;
+        seq.end()
+        
     }
 }
 
@@ -433,7 +643,7 @@ impl ArtifactNodeRepr {
 
     fn address_to_fqn(
         graph_name: &String,
-        addr_result: Result<InputAddress, String>,
+        addr_result: Result<InputAddress, TorbInput>,
     ) -> Option<String> {
         match addr_result {
             Ok(addr) => {
@@ -456,12 +666,15 @@ impl ArtifactNodeRepr {
     ) -> Result<(), Box<dyn std::error::Error>> {
         let mut implicit_deps_inputs = IndexSet::new();
 
-        let inputs_fn = |_spec: &String, val: Result<InputAddress, String>| -> String {
+        let inputs_fn = |_spec: &String, val: Result<InputAddress, TorbInput>| -> String {
             let fqn_option = ArtifactNodeRepr::address_to_fqn(graph_name, val);
 
             if fqn_option.is_some() {
                 let fqn = fqn_option.unwrap();
-                implicit_deps_inputs.insert(fqn);
+
+                if fqn != self.fqn {
+                    implicit_deps_inputs.insert(fqn);
+                }
             };
 
             "".to_string()
@@ -469,18 +682,21 @@ impl ArtifactNodeRepr {
 
         let mut implicit_deps_values = IndexSet::new();
 
-        let values_fn = |addr: Result<InputAddress, String>| -> String {
+        let values_fn = |addr: Result<InputAddress, TorbInput>| -> String {
             let fqn_option = ArtifactNodeRepr::address_to_fqn(graph_name, addr);
 
             if fqn_option.is_some() {
                 let fqn = fqn_option.unwrap();
-                implicit_deps_values.insert(fqn);
+                if fqn != self.fqn {
+                    implicit_deps_values.insert(fqn);
+                }
             };
 
             "".to_string()
         };
 
-        let (_, _, _) = InputResolver::resolve(&self, Some(values_fn), Some(inputs_fn), NO_INITS_FN)?;
+        let (_, _, _) =
+            InputResolver::resolve(&self, Some(values_fn), Some(inputs_fn), NO_INITS_FN)?;
 
         let unioned_deps = implicit_deps_inputs.union(&mut implicit_deps_values);
 
@@ -532,32 +748,20 @@ impl ArtifactNodeRepr {
             let input_spec = spec.get(key).unwrap();
 
             let val_type = match val {
-                TorbInput::String(val) => {
-                    match InputAddress::try_from(val.as_str()) {
-                        Ok(_) => {
-                            "input_address"
-                        }
-                        _ => {
-                            "string"
-                        }
-                    }
+                TorbInput::String(val) => match InputAddress::try_from(val.as_str()) {
+                    Ok(_) => "input_address",
+                    _ => "string",
                 },
-                TorbInput::Bool(val) => {
-                    "bool" 
-                },
-                TorbInput::Numeric(val) => {
-                    "numeric"
-                },
-                TorbInput::Array(val) => {
-                    "array"
-                },
-                TorbInput::Address(val) => {
-                    "address"
-                }
+                TorbInput::Bool(_val) => "bool",
+                TorbInput::Numeric(_val) => "numeric",
+                TorbInput::Array(_val) => "array",
             };
 
             if val_type != "address" && input_spec.typing != val_type {
-                return Err(format!("{key} is type {val_type} but is supposed to be {}", input_spec.typing))
+                return Err(format!(
+                    "{key} is type {val_type} but is supposed to be {}",
+                    input_spec.typing
+                ));
             }
         }
 
@@ -572,10 +776,7 @@ impl ArtifactNodeRepr {
 
         for (key, value) in spec.iter() {
             let input = inputs.get(key).unwrap_or(&value.default);
-            mapped_inputs.insert(
-                key.to_string(),
-                (value.mapping.clone(), input.clone()),
-            );
+            mapped_inputs.insert(key.to_string(), (value.mapping.clone(), input.clone()));
         }
 
         mapped_inputs

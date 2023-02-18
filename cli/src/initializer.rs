@@ -1,4 +1,4 @@
-use crate::{artifacts::{ArtifactRepr, ArtifactNodeRepr, TorbInput}, resolver::inputs::{InputResolver, NO_INPUTS_FN, NO_VALUES_FN}};
+use crate::{artifacts::{ArtifactRepr, ArtifactNodeRepr}, resolver::inputs::{InputResolver, NO_INPUTS_FN, NO_VALUES_FN}};
 use std::{env::current_dir};
 use crate::utils::{run_command_in_user_shell, buildstate_path_or_create};
 use indexmap::IndexSet;
@@ -57,7 +57,7 @@ impl<'a> StackInitializer<'a> {
     fn initalize_node(&self, node: &ArtifactNodeRepr) -> Result<(), Box<dyn std::error::Error>> {
         self.copy_required_files(node)?;
 
-        if let Some(steps) = node.init_step.clone() {
+        if node.init_step.is_some() {
             let (_, _, resolved_steps) = InputResolver::resolve(node, NO_VALUES_FN, NO_INPUTS_FN, Some(true))?;
 
             let script = resolved_steps.unwrap().join(";");

@@ -1,15 +1,14 @@
-use crate::artifacts::{ArtifactNodeRepr, ArtifactRepr};
+use crate::artifacts::{ArtifactNodeRepr, ArtifactRepr, TorbInput, TorbNumeric};
 use crate::resolver::inputs::{InputResolver, NO_INPUTS_FN, NO_VALUES_FN, NO_INITS_FN};
 use crate::utils::{buildstate_path_or_create, for_each_artifact_repository, torb_path, kebab_to_snake_case};
 
-use hcl::{Block, Body, Expression, Object, ObjectKey, RawExpression};
+use hcl::{Block, Body, Expression, Object, ObjectKey, RawExpression, Number};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 use thiserror::Error;
 use indexmap::IndexSet;
-use once_cell::sync::Lazy;
 
 #[derive(Error, Debug)]
 pub enum TorbComposerErrors {}
@@ -52,7 +51,7 @@ impl<'a> InputAddress {
         }
     }
 
-    fn is_init_address(vals: Vec<&str>) -> Option<InputAddress> {
+    fn is_init_address(vals: &Vec<&str>) -> Option<InputAddress> {
         if vals.len() == 3 && vals[0] == "TORB" {
             let locality = vals[0].to_string();
             let node_type = "".to_string();
@@ -72,7 +71,7 @@ impl<'a> InputAddress {
         None
     }
 
-    fn is_input_address(vals: Vec<&str>) -> Option<InputAddress> {
+    fn is_input_address(vals: &Vec<&str>) -> Option<InputAddress> {
         if vals.len() == 5 && vals[0] == "self" {
             let locality = vals[0].to_string();
             let node_type = vals[1].to_string();
@@ -101,28 +100,58 @@ impl<'a> InputAddress {
 }
 
 impl TryFrom<&str> for InputAddress {
-    type Error = String;
+    type Error = TorbInput;
 
-    fn try_from(input: &str) -> Result<Self, String> {
+    fn try_from(input: &str) -> Result<Self, TorbInput> {
         let vals = input.split(".").collect::<Vec<&str>>();
 
         if !InputAddress::supported_localities().contains(vals[0]) {
-            return Err(input.to_string())
+            return Err(TorbInput::String(input.to_string()))
         }
 
-        let init_addr_opt = InputAddress::is_init_address(vals);
+        let init_addr_opt = InputAddress::is_init_address(&vals);
 
         if init_addr_opt.is_some() {
             return Ok(init_addr_opt.unwrap())
         }
 
-        let input_addr_opt = InputAddress::is_input_address(vals);
+        let input_addr_opt = InputAddress::is_input_address(&vals);
 
         if input_addr_opt.is_some() {
             return Ok(input_addr_opt.unwrap())
         }
 
-        Err(input.to_string())
+        Err(TorbInput::String(input.to_string()))
+    }
+}
+
+impl TryFrom<&TorbInput> for InputAddress {
+    type Error = TorbInput;
+
+    fn try_from(input: &TorbInput) -> Result<Self, TorbInput> {
+        if let TorbInput::String(str_input) = input {
+            let vals = str_input.split(".").collect::<Vec<&str>>();
+
+            if !InputAddress::supported_localities().contains(vals[0]) {
+                return Err(TorbInput::String(str_input.to_string()))
+            }
+
+            let init_addr_opt = InputAddress::is_init_address(&vals);
+
+            if init_addr_opt.is_some() {
+                return Ok(init_addr_opt.unwrap())
+            }
+
+            let input_addr_opt = InputAddress::is_input_address(&vals);
+
+            if input_addr_opt.is_some() {
+                return Ok(input_addr_opt.unwrap())
+            }
+
+            Err(TorbInput::String(str_input.to_string()))
+        } else {
+            Err(input.clone())
+        }
     }
 }
 
@@ -162,20 +191,20 @@ impl<'a> Composer<'a> {
 
     fn interpolate_inputs_into_helm_values(
         &self,
-        torb_input_address: Result<InputAddress, String>,
+        torb_input_address: Result<InputAddress, TorbInput>,
     ) -> String {
         let output_value = self.input_values_from_input_address(torb_input_address.clone());
         let string_value = hcl::format::to_string(&output_value).unwrap();
-
         match torb_input_address {
             Ok(input_address) => {
+
                 if reserved_outputs().contains_key(input_address.property_specifier.as_str()) {
                     string_value.replace("\"", "")
                 } else {
                     format!("${{{}}}", string_value.replace("\"", ""))
                 }
             }
-            Err(s) => s,
+            Err(_s) => string_value,
         }
     }
 
@@ -199,7 +228,7 @@ impl<'a> Composer<'a> {
     fn k8s_status_values_path_from_torb_input(&self, torb_input_address: InputAddress) -> String {
         let output_node = self.get_node_for_output_value(&torb_input_address);
 
-        let kube_value = if torb_input_address.node_property == "output" {
+        let kube_value = if torb_input_address.node_property == "output" || torb_input_address.node_property == "inputs" {
             let (kube_val, _) = output_node
                 .mapped_inputs
                 .get(&torb_input_address.property_specifier)
@@ -427,6 +456,8 @@ impl<'a> Composer<'a> {
         let mut input_vals = Vec::<Object<ObjectKey, Expression>>::new();
 
         let resolver_fn = |spec: &String, input_address_result| {
+            println!("{:?}", spec);
+            println!("{:?}", input_address_result);
             let mut input: Object<ObjectKey, Expression> = Object::new();
 
             input.insert(
@@ -441,7 +472,10 @@ impl<'a> Composer<'a> {
                 mapped_expression.clone(),
             );
 
-            input_vals.push(input);
+            if spec != "" {
+                input_vals.push(input);
+            }
+
 
             mapped_expression.clone().to_string()
         };
@@ -454,7 +488,7 @@ impl<'a> Composer<'a> {
 
     fn input_values_from_input_address(
         &self,
-        input_address: Result<InputAddress, String>,
+        input_address: Result<InputAddress, TorbInput>,
     ) -> Expression {
         match input_address {
             Ok(input_address) => {
@@ -467,8 +501,48 @@ impl<'a> Composer<'a> {
                     Expression::Raw(RawExpression::new(val.clone()))
                 }
             }
-            Err(input_result) => Expression::String(input_result),
+            Err(input_result) => {
+                match input_result {
+                    TorbInput::String(val) => Expression::String(val),
+                    TorbInput::Bool(val) => Expression::Bool(val),
+                    TorbInput::Numeric(val) => {
+                        match val {
+                            TorbNumeric::Float(val) => Expression::Number(Number::from_f64(val).unwrap()),
+                            TorbNumeric::Int(val) => Expression::Number(Number::from(val)),
+                            TorbNumeric::NegInt(val) => Expression::Number(Number::from(val))
+                        }
+                    }
+                    TorbInput::Array(val) => {
+                        Expression::Array(self.torb_array_to_hcl_array(val))
+                    }
+                }
+                
+            }
         }
+    }
+
+    fn torb_array_to_hcl_array(&self, arr: Vec<TorbInput>) -> Vec<Expression> {
+        let mut new = Vec::<Expression>::new();
+        for input in arr.iter().cloned() {
+            let expr = match input {
+                TorbInput::String(val) => Expression::String(val),
+                TorbInput::Bool(val) => Expression::Bool(val),
+                TorbInput::Numeric(val) => {
+                    match val {
+                        TorbNumeric::Float(val) => Expression::Number(Number::from_f64(val).unwrap()),
+                        TorbNumeric::Int(val) => Expression::Number(Number::from(val)),
+                        TorbNumeric::NegInt(val) => Expression::Number(Number::from(val))
+                    }
+                }
+                TorbInput::Array(_val) => {
+                    panic!("Nested array types are not supported.")
+                }
+            };
+
+            new.push(expr)
+        }
+
+        new
     }
 
     fn add_required_providers_to_main_struct(&mut self) {
@@ -582,7 +656,7 @@ impl<'a> Composer<'a> {
 
         let inputs = self.create_input_values(node);
 
-        let resolver_fn = &mut |address: Result<InputAddress, String>| -> String {
+        let resolver_fn = &mut |address: Result<InputAddress, TorbInput>| -> String {
             self.interpolate_inputs_into_helm_values(address)
         };
 
