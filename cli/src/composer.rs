@@ -1,6 +1,6 @@
 use crate::artifacts::{ArtifactNodeRepr, ArtifactRepr, TorbInput, TorbNumeric};
 use crate::resolver::inputs::{InputResolver, NO_INPUTS_FN, NO_VALUES_FN, NO_INITS_FN};
-use crate::utils::{buildstate_path_or_create, for_each_artifact_repository, torb_path, kebab_to_snake_case};
+use crate::utils::{buildstate_path_or_create, for_each_artifact_repository, torb_path, kebab_to_snake_case, snake_case_to_kebab};
 
 use hcl::{Block, Body, Expression, Object, ObjectKey, RawExpression, Number};
 use serde::{Deserialize, Serialize};
@@ -394,7 +394,7 @@ impl<'a> Composer<'a> {
             .add_label(format!("{}_{}", &snake_case_release_name, &node.display_name()))
             .add_attribute((
                 "release_name",
-                format!("{}-{}", self.release_name.clone(), node.name),
+                format!("{}-{}", self.release_name.clone(), snake_case_to_kebab(&node.name)),
             ))
             .add_attribute(("namespace", namespace))
             .add_attribute((
@@ -456,8 +456,6 @@ impl<'a> Composer<'a> {
         let mut input_vals = Vec::<Object<ObjectKey, Expression>>::new();
 
         let resolver_fn = |spec: &String, input_address_result| {
-            println!("{:?}", spec);
-            println!("{:?}", input_address_result);
             let mut input: Object<ObjectKey, Expression> = Object::new();
 
             input.insert(
@@ -504,16 +502,16 @@ impl<'a> Composer<'a> {
             Err(input_result) => {
                 match input_result {
                     TorbInput::String(val) => Expression::String(val),
-                    TorbInput::Bool(val) => Expression::Bool(val),
+                    TorbInput::Bool(val) => Expression::String(val.to_string()),
                     TorbInput::Numeric(val) => {
                         match val {
-                            TorbNumeric::Float(val) => Expression::Number(Number::from_f64(val).unwrap()),
-                            TorbNumeric::Int(val) => Expression::Number(Number::from(val)),
-                            TorbNumeric::NegInt(val) => Expression::Number(Number::from(val))
+                            TorbNumeric::Float(val) => Expression::String(Number::from_f64(val).unwrap().to_string()),
+                            TorbNumeric::Int(val) => Expression::String(Number::from(val).to_string()),
+                            TorbNumeric::NegInt(val) => Expression::String(Number::from(val).to_string())
                         }
                     }
                     TorbInput::Array(val) => {
-                        Expression::Array(self.torb_array_to_hcl_array(val))
+                        Expression::String(self.torb_array_to_hcl_helm_array(val))
                     }
                 }
                 
@@ -521,17 +519,17 @@ impl<'a> Composer<'a> {
         }
     }
 
-    fn torb_array_to_hcl_array(&self, arr: Vec<TorbInput>) -> Vec<Expression> {
-        let mut new = Vec::<Expression>::new();
+    fn torb_array_to_hcl_helm_array(&self, arr: Vec<TorbInput>) -> String {
+        let mut new = Vec::<String>::new();
         for input in arr.iter().cloned() {
             let expr = match input {
-                TorbInput::String(val) => Expression::String(val),
-                TorbInput::Bool(val) => Expression::Bool(val),
+                TorbInput::String(val) => Expression::String(val).to_string(),
+                TorbInput::Bool(val) => Expression::Bool(val).to_string(),
                 TorbInput::Numeric(val) => {
                     match val {
-                        TorbNumeric::Float(val) => Expression::Number(Number::from_f64(val).unwrap()),
-                        TorbNumeric::Int(val) => Expression::Number(Number::from(val)),
-                        TorbNumeric::NegInt(val) => Expression::Number(Number::from(val))
+                        TorbNumeric::Float(val) => Expression::Number(Number::from_f64(val).unwrap()).to_string(),
+                        TorbNumeric::Int(val) => Expression::Number(Number::from(val)).to_string(),
+                        TorbNumeric::NegInt(val) => Expression::Number(Number::from(val)).to_string()
                     }
                 }
                 TorbInput::Array(_val) => {
@@ -542,7 +540,7 @@ impl<'a> Composer<'a> {
             new.push(expr)
         }
 
-        new
+        "{".to_owned() + &new.join(",") + "}"
     }
 
     fn add_required_providers_to_main_struct(&mut self) {
@@ -587,7 +585,7 @@ impl<'a> Composer<'a> {
             ("source", source),
             (
                 "release_name",
-                format!("{}-{}", self.release_name.clone(), node.name),
+                format!("{}-{}", self.release_name.clone(), snake_case_to_kebab(&node.name)),
             ),
             ("namespace", namespace),
         ];

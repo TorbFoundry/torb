@@ -67,7 +67,6 @@ impl<'a, F, U> InputResolver<'a, F, U> {
     where
         U: FnMut(&String, Result<InputAddress, TorbInput>) -> String,
     {
-        println!("Abracadabra!");
         let f = self.inputs_fn.as_mut().unwrap();
 
         let mut out: Vec<(String, String)> = vec![];

@@ -502,7 +502,6 @@ impl<'de> Visitor<'de> for TorbInputSpecDeserializer {
             default,
         };
 
-        println!("Finishing");
         Ok(new_obj)
     }
 }
@@ -590,7 +589,16 @@ impl Serialize for TorbInputSpec {
 
 impl ArtifactNodeRepr {
     pub fn display_name(&self) -> String {
-        kebab_to_snake_case(&self.name)
+        let name = self.mapped_inputs.get("name").map(|(_, input)| {
+            if let crate::artifacts::TorbInput::String(val) = input.clone() {
+                val
+            }
+            else {
+                self.name.clone()
+            }
+        }).or(Some(self.name.clone())).unwrap();
+
+        kebab_to_snake_case(&name)
     }
 
     #[allow(dead_code)]

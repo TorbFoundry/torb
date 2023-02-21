@@ -49,14 +49,7 @@ impl<'a> StackBuilder<'a> {
     fn build_node(&self, node: &ArtifactNodeRepr) -> Result<(), TorbBuilderErrors> {
         if let Some(step) = node.build_step.clone() {
             if step.dockerfile != "" {
-                let name = node.mapped_inputs.get("name").map(|(_, input)| {
-                    if let crate::artifacts::TorbInput::String(val) = input.clone() {
-                        val
-                    }
-                    else {
-                        node.name.clone()
-                    }
-                }).or(Some(node.name.clone())).unwrap();
+                let name = node.display_name();
 
                 self.build_docker(&name, step.dockerfile, step.tag, step.registry)
                     .and_then(|_| Ok(()))

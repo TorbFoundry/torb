@@ -50,7 +50,6 @@ impl<'a> StackInitializer<'a> {
             }
         }
 
-        println!("{}", node.file_path);
         Ok(())
     }
 
