@@ -1,9 +1,7 @@
-use crate::artifacts::{ArtifactRepr, ArtifactNodeRepr};
+use crate::{artifacts::{ArtifactRepr, ArtifactNodeRepr}, resolver::inputs::{InputResolver, NO_INPUTS_FN, NO_VALUES_FN}};
 use std::{env::current_dir};
 use crate::utils::{run_command_in_user_shell, buildstate_path_or_create};
 use indexmap::IndexSet;
-
-const TOKEN: &str = "TORB";
 
 pub struct StackInitializer<'a> {
     artifact: &'a ArtifactRepr,
@@ -52,81 +50,24 @@ impl<'a> StackInitializer<'a> {
             }
         }
 
-        println!("{}", node.file_path);
         Ok(())
     }
 
     fn initalize_node(&self, node: &ArtifactNodeRepr) -> Result<(), Box<dyn std::error::Error>> {
         self.copy_required_files(node)?;
 
-        if let Some(steps) = node.init_step.clone() {
-            let resolved_steps = steps.iter().map(|step| {
-                self.resolve_torb_value_interpolation(step, node)
-            }).collect::<Vec<String>>();
-            
-            let script = resolved_steps.join(";");
+        if node.init_step.is_some() {
+            let (_, _, resolved_steps) = InputResolver::resolve(node, NO_VALUES_FN, NO_INPUTS_FN, Some(true))?;
 
-            run_command_in_user_shell(script)?;
+            let script = resolved_steps.unwrap().join(";");
+
+            run_command_in_user_shell(script, Some("/bin/bash".to_string()))?;
         };
 
         Ok(())
     }
 
-    /*
-        Case 1: Token at start
-            Remaining = anything after token
-        Case 2: Token in middle
-            Remaining = anything before or after token
-        Case 3: Token at end
-            Remaining = anything before token
-     */
-    fn resolve_torb_value_interpolation(&self, script_step: &String, node: &ArtifactNodeRepr) -> String {
-        let start_option: Option<usize> = script_step.find(TOKEN);
-        match start_option {
-            Some(start) => {
-                let mut end = script_step.split_at(start).1.find(" ").unwrap_or(script_step.len());
-                end = script_step.split_at(start).1.find("/").unwrap_or(end);
 
-                let remaining = if start == 0 && end == script_step.len() {
-                    let resolved_token = self.resolve_input_token(script_step.to_string(), node);
-
-                    resolved_token
-                } else if end == script_step.len() {
-                    let parts = script_step.split_at(start);
-                    let resolved_token = self.resolve_input_token(parts.1.to_string(), node);
-                    format!("{}{}", parts.0.to_string(), resolved_token)
-                } else if start == 0 {
-                    let parts = script_step.split_at(end);
-                    let resolved_token = self.resolve_input_token(parts.0.to_string(), node);
-                    format!("{}{}", resolved_token, parts.1.to_string())
-                } else {
-                    let parts = script_step.split_at(start);
-                    let remaining_1 = parts.0.to_string();
-                    let parts = parts.1.split_at(end);
-                    let token = parts.0.to_string();
-                    let remaining_2 = parts.1.to_string();
-
-                    let resolved_token = self.resolve_input_token(token, node);
-
-                    format!("{}{}{}", remaining_1, resolved_token, remaining_2)
-                };
-
-                println!("remaining: {}", remaining);
-                self.resolve_torb_value_interpolation(&remaining.to_string(), node)
-            },
-            None => {
-                script_step.clone()
-            }
-        }
-    }
-
-    fn resolve_input_token(&self, token: String, node: &ArtifactNodeRepr) -> String {
-        let input = token.split("TORB.inputs.").collect::<Vec<&str>>()[1];
-        println!("input: {}", input);
-        let (_, val) = node.mapped_inputs.get(input).unwrap();
-
-        val.clone()
-    }
 
     fn walk_artifact(
         &mut self,

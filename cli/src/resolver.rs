@@ -1,6 +1,6 @@
 pub mod inputs;
 
-use crate::artifacts::{ArtifactNodeRepr, BuildStep};
+use crate::artifacts::{ArtifactNodeRepr, BuildStep, TorbInput};
 use crate::utils::{for_each_artifact_repository, normalize_name, torb_path};
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
@@ -317,7 +317,7 @@ impl Resolver {
         node_name: &str,
         service_name: &str,
         artifact_path: PathBuf,
-        inputs: IndexMap<String, String>,
+        inputs: IndexMap<String, TorbInput>,
         values: serde_yaml::Value,
         source: &str,
         namespace: Option<String>
@@ -385,7 +385,7 @@ impl Resolver {
         node_name: &str,
         project_name: &str,
         artifact_path: PathBuf,
-        inputs: IndexMap<String, String>,
+        inputs: IndexMap<String, TorbInput>,
         build_config: Option<&Value>,
         values: serde_yaml::Value,
         source: &str,
@@ -435,10 +435,10 @@ impl Resolver {
 
     fn deserialize_params(
         params: Option<&serde_yaml::Value>,
-    ) -> Result<IndexMap<String, String>, Box<dyn Error>> {
+    ) -> Result<IndexMap<String, TorbInput>, Box<dyn Error>> {
         match params {
             Some(params) => {
-                let deserialized_params: IndexMap<String, String> =
+                let deserialized_params: IndexMap<String, TorbInput> =
                     serde_yaml::from_value(params.clone())?;
 
                 Ok(deserialized_params)
@@ -592,24 +592,6 @@ impl Resolver {
                         Some(())
                     });
                 }
-                // TODO(Ian): Revist nested stacks after MVP is done.
-                // "stacks" => {
-                //     for (stack_name, stack_value) in value.as_mapping().unwrap().iter() {
-                //         let global_stack_name = self.config.stack_name.clone();
-                //         let local_stack_name = stack_name.as_str().unwrap();
-                //         let stack_value = stack_value.clone();
-                //         let stack_node = self
-                //             .resolve_node(
-                //                 global_stack_name.as_str(),
-                //                 "stack",
-                //                 local_stack_name,
-                //                 stack_value,
-                //             )
-                //             .unwrap();
-                //         graph.add_stack(&stack_node);
-                //         graph.add_all_incoming_edges_downstream(global_stack_name.clone(), &stack_node);
-                //     }
-                // }
                 _ => (),
             }
         }

@@ -1,9 +1,10 @@
-use crate::artifacts::{ArtifactNodeRepr, ArtifactRepr};
-use crate::resolver::inputs::{InputResolver, NO_INPUTS_FN, NO_VALUES_FN};
-use crate::utils::{buildstate_path_or_create, for_each_artifact_repository, torb_path, kebab_to_snake_case};
+use crate::artifacts::{ArtifactNodeRepr, ArtifactRepr, TorbInput, TorbNumeric};
+use crate::resolver::inputs::{InputResolver, NO_INPUTS_FN, NO_VALUES_FN, NO_INITS_FN};
+use crate::utils::{buildstate_path_or_create, for_each_artifact_repository, torb_path, kebab_to_snake_case, snake_case_to_kebab};
 
-use hcl::{Block, Body, Expression, Object, ObjectKey, RawExpression};
-use std::collections::{HashMap};
+use hcl::{Block, Body, Expression, Object, ObjectKey, RawExpression, Number};
+use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 use thiserror::Error;
@@ -24,7 +25,7 @@ fn reserved_outputs() -> HashMap<&'static str, &'static str> {
     reserved_hash
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InputAddress {
     pub locality: String,
     pub node_type: String,
@@ -33,7 +34,7 @@ pub struct InputAddress {
     pub property_specifier: String,
 }
 
-impl InputAddress {
+impl<'a> InputAddress {
     fn new(
         locality: String,
         node_type: String,
@@ -49,30 +50,107 @@ impl InputAddress {
             property_specifier,
         }
     }
-}
 
-impl TryFrom<&str> for InputAddress {
-    type Error = String;
+    fn is_init_address(vals: &Vec<&str>) -> Option<InputAddress> {
+        if vals.len() == 3 && vals[0] == "TORB" {
+            let locality = vals[0].to_string();
+            let node_type = "".to_string();
+            let node_name = "".to_string();
+            let node_property = vals[1].to_string();
+            let property_specifier = vals[2].to_string();
 
-    fn try_from(input: &str) -> Result<Self, String> {
-        let vals = input.split(".").collect::<Vec<&str>>();
+            return Some(InputAddress::new(
+                locality,
+                node_type,
+                node_name,
+                node_property,
+                property_specifier
+            ))
+        }
 
-        if vals.len() == 5 {
+        None
+    }
+
+    fn is_input_address(vals: &Vec<&str>) -> Option<InputAddress> {
+        if vals.len() == 5 && vals[0] == "self" {
             let locality = vals[0].to_string();
             let node_type = vals[1].to_string();
             let node_name = vals[2].to_string();
             let node_property = vals[3].to_string();
             let property_specifier = vals[4].to_string();
 
-            Ok(InputAddress::new(
+            return Some(InputAddress::new(
                 locality,
                 node_type,
                 node_name,
                 node_property,
                 property_specifier,
             ))
+        } 
+
+        None
+    }
+
+    fn supported_localities() -> HashSet<&'a str> {
+        let set = vec!["self", "TORB"];
+
+        set.into_iter().collect::<HashSet<&'a str>>()
+    }
+
+}
+
+impl TryFrom<&str> for InputAddress {
+    type Error = TorbInput;
+
+    fn try_from(input: &str) -> Result<Self, TorbInput> {
+        let vals = input.split(".").collect::<Vec<&str>>();
+
+        if !InputAddress::supported_localities().contains(vals[0]) {
+            return Err(TorbInput::String(input.to_string()))
+        }
+
+        let init_addr_opt = InputAddress::is_init_address(&vals);
+
+        if init_addr_opt.is_some() {
+            return Ok(init_addr_opt.unwrap())
+        }
+
+        let input_addr_opt = InputAddress::is_input_address(&vals);
+
+        if input_addr_opt.is_some() {
+            return Ok(input_addr_opt.unwrap())
+        }
+
+        Err(TorbInput::String(input.to_string()))
+    }
+}
+
+impl TryFrom<&TorbInput> for InputAddress {
+    type Error = TorbInput;
+
+    fn try_from(input: &TorbInput) -> Result<Self, TorbInput> {
+        if let TorbInput::String(str_input) = input {
+            let vals = str_input.split(".").collect::<Vec<&str>>();
+
+            if !InputAddress::supported_localities().contains(vals[0]) {
+                return Err(TorbInput::String(str_input.to_string()))
+            }
+
+            let init_addr_opt = InputAddress::is_init_address(&vals);
+
+            if init_addr_opt.is_some() {
+                return Ok(init_addr_opt.unwrap())
+            }
+
+            let input_addr_opt = InputAddress::is_input_address(&vals);
+
+            if input_addr_opt.is_some() {
+                return Ok(input_addr_opt.unwrap())
+            }
+
+            Err(TorbInput::String(str_input.to_string()))
         } else {
-            Err(input.to_string())
+            Err(input.clone())
         }
     }
 }
@@ -113,20 +191,20 @@ impl<'a> Composer<'a> {
 
     fn interpolate_inputs_into_helm_values(
         &self,
-        torb_input_address: Result<InputAddress, String>,
+        torb_input_address: Result<InputAddress, TorbInput>,
     ) -> String {
         let output_value = self.input_values_from_input_address(torb_input_address.clone());
         let string_value = hcl::format::to_string(&output_value).unwrap();
-
         match torb_input_address {
             Ok(input_address) => {
+
                 if reserved_outputs().contains_key(input_address.property_specifier.as_str()) {
                     string_value.replace("\"", "")
                 } else {
                     format!("${{{}}}", string_value.replace("\"", ""))
                 }
             }
-            Err(s) => s,
+            Err(_s) => string_value,
         }
     }
 
@@ -150,7 +228,7 @@ impl<'a> Composer<'a> {
     fn k8s_status_values_path_from_torb_input(&self, torb_input_address: InputAddress) -> String {
         let output_node = self.get_node_for_output_value(&torb_input_address);
 
-        let kube_value = if torb_input_address.node_property == "output" {
+        let kube_value = if torb_input_address.node_property == "output" || torb_input_address.node_property == "inputs" {
             let (kube_val, _) = output_node
                 .mapped_inputs
                 .get(&torb_input_address.property_specifier)
@@ -316,7 +394,7 @@ impl<'a> Composer<'a> {
             .add_label(format!("{}_{}", &snake_case_release_name, &node.display_name()))
             .add_attribute((
                 "release_name",
-                format!("{}-{}", self.release_name.clone(), node.name),
+                format!("{}-{}", self.release_name.clone(), snake_case_to_kebab(&node.name)),
             ))
             .add_attribute(("namespace", namespace))
             .add_attribute((
@@ -392,12 +470,15 @@ impl<'a> Composer<'a> {
                 mapped_expression.clone(),
             );
 
-            input_vals.push(input);
+            if spec != "" {
+                input_vals.push(input);
+            }
+
 
             mapped_expression.clone().to_string()
         };
 
-        let (_, _) = InputResolver::resolve(node, NO_VALUES_FN, Some(resolver_fn))
+        let (_, _, _) = InputResolver::resolve(node, NO_VALUES_FN, Some(resolver_fn), NO_INITS_FN)
             .expect("Unable to resolve listed inputs.");
 
         input_vals
@@ -405,7 +486,7 @@ impl<'a> Composer<'a> {
 
     fn input_values_from_input_address(
         &self,
-        input_address: Result<InputAddress, String>,
+        input_address: Result<InputAddress, TorbInput>,
     ) -> Expression {
         match input_address {
             Ok(input_address) => {
@@ -418,8 +499,48 @@ impl<'a> Composer<'a> {
                     Expression::Raw(RawExpression::new(val.clone()))
                 }
             }
-            Err(input_result) => Expression::String(input_result),
+            Err(input_result) => {
+                match input_result {
+                    TorbInput::String(val) => Expression::String(val),
+                    TorbInput::Bool(val) => Expression::String(val.to_string()),
+                    TorbInput::Numeric(val) => {
+                        match val {
+                            TorbNumeric::Float(val) => Expression::String(Number::from_f64(val).unwrap().to_string()),
+                            TorbNumeric::Int(val) => Expression::String(Number::from(val).to_string()),
+                            TorbNumeric::NegInt(val) => Expression::String(Number::from(val).to_string())
+                        }
+                    }
+                    TorbInput::Array(val) => {
+                        Expression::String(self.torb_array_to_hcl_helm_array(val))
+                    }
+                }
+                
+            }
         }
+    }
+
+    fn torb_array_to_hcl_helm_array(&self, arr: Vec<TorbInput>) -> String {
+        let mut new = Vec::<String>::new();
+        for input in arr.iter().cloned() {
+            let expr = match input {
+                TorbInput::String(val) => Expression::String(val).to_string(),
+                TorbInput::Bool(val) => Expression::Bool(val).to_string(),
+                TorbInput::Numeric(val) => {
+                    match val {
+                        TorbNumeric::Float(val) => Expression::Number(Number::from_f64(val).unwrap()).to_string(),
+                        TorbNumeric::Int(val) => Expression::Number(Number::from(val)).to_string(),
+                        TorbNumeric::NegInt(val) => Expression::Number(Number::from(val)).to_string()
+                    }
+                }
+                TorbInput::Array(_val) => {
+                    panic!("Nested array types are not supported.")
+                }
+            };
+
+            new.push(expr)
+        }
+
+        "{".to_owned() + &new.join(",") + "}"
     }
 
     fn add_required_providers_to_main_struct(&mut self) {
@@ -430,7 +551,7 @@ impl<'a> Composer<'a> {
                         "torb",
                         Expression::from_iter(vec![
                             ("source", "TorbFoundry/torb"),
-                            ("version", "0.1.1"),
+                            ("version", "0.1.2"),
                         ]),
                     ))
                     .build(),
@@ -464,7 +585,7 @@ impl<'a> Composer<'a> {
             ("source", source),
             (
                 "release_name",
-                format!("{}-{}", self.release_name.clone(), node.name),
+                format!("{}-{}", self.release_name.clone(), snake_case_to_kebab(&node.name)),
             ),
             ("namespace", namespace),
         ];
@@ -533,11 +654,11 @@ impl<'a> Composer<'a> {
 
         let inputs = self.create_input_values(node);
 
-        let resolver_fn = &mut |address: Result<InputAddress, String>| -> String {
+        let resolver_fn = &mut |address: Result<InputAddress, TorbInput>| -> String {
             self.interpolate_inputs_into_helm_values(address)
         };
 
-        let (mapped_values, _) = InputResolver::resolve(node, Some(resolver_fn), NO_INPUTS_FN)?;
+        let (mapped_values, _, _) = InputResolver::resolve(node, Some(resolver_fn), NO_INPUTS_FN, NO_INITS_FN)?;
 
 
         if mapped_values.clone().unwrap() != "---\n~\n" {

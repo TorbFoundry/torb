@@ -1,23 +1,24 @@
-use crate::resolver::inputs::InputResolver;
-use crate::resolver::{NodeDependencies, StackGraph, resolve_stack};
-use crate::utils::{checksum, buildstate_path_or_create, kebab_to_snake_case};
-use crate::composer::{InputAddress};
+use crate::composer::InputAddress;
+use crate::resolver::inputs::{InputResolver, NO_INITS_FN};
+use crate::resolver::{resolve_stack, NodeDependencies, StackGraph};
+use crate::utils::{buildstate_path_or_create, checksum, kebab_to_snake_case};
 
 use data_encoding::BASE32;
 use indexmap::{IndexMap, IndexSet};
-use serde::{Deserialize, Serialize};
+use memorable_wordlist;
+use once_cell::sync::Lazy;
+use serde::ser::SerializeSeq;
+use serde::{de, de::SeqAccess, de::Visitor, Deserialize, Deserializer, Serialize};
 use serde_yaml::{self};
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::Write;
 use thiserror::Error;
-use memorable_wordlist;
 
 #[derive(Error, Debug)]
 pub enum TorbArtifactErrors {
     #[error("Hash of loaded build file does not match hash of file on disk.")]
     LoadChecksumFailed,
-
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -37,6 +38,103 @@ pub struct BuildStep {
     pub registry: String,
 }
 
+fn get_types() -> IndexSet<&'static str> {
+    IndexSet::from(["bool", "array", "string", "numeric"])
+}
+
+pub static TYPES: Lazy<IndexSet<&str>> = Lazy::new(get_types);
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub enum TorbNumeric {
+    Int(u64),
+    NegInt(i64),
+    Float(f64),
+}
+
+#[derive(Debug, Clone)]
+pub enum TorbInput {
+    Bool(bool),
+    Array(Vec<TorbInput>),
+    String(String),
+    Numeric(TorbNumeric),
+}
+
+impl From<bool> for TorbInput {
+    fn from(value: bool) -> Self {
+        TorbInput::Bool(value)
+    }
+}
+
+impl From<u64> for TorbInput {
+    fn from(value: u64) -> Self {
+        let wrapper = TorbNumeric::Int(value);
+
+        TorbInput::Numeric(wrapper)
+    }
+}
+
+impl From<i64> for TorbInput {
+    fn from(value: i64) -> Self {
+        let wrapper = TorbNumeric::NegInt(value);
+
+        TorbInput::Numeric(wrapper)
+    }
+}
+
+impl From<f64> for TorbInput {
+    fn from(value: f64) -> Self {
+        let wrapper = TorbNumeric::Float(value);
+
+        TorbInput::Numeric(wrapper)
+    }
+}
+
+impl From<String> for TorbInput {
+    fn from(value: String) -> Self {
+        TorbInput::String(value)
+    }
+}
+
+impl From<&str> for TorbInput {
+    fn from(value: &str) -> Self {
+        TorbInput::String(value.to_string())
+    }
+}
+
+
+impl<T> From<Vec<T>> for TorbInput
+where
+    TorbInput: From<T>,
+    T: Clone,
+{
+    fn from(value: Vec<T>) -> Self {
+        let mut new_vec = Vec::<TorbInput>::new();
+
+        for item in value.iter().cloned() {
+            new_vec.push(Into::<TorbInput>::into(item));
+        }
+
+        TorbInput::Array(new_vec)
+    }
+}
+
+impl TorbInput {
+    pub fn serialize_for_init(&self) -> String {
+
+        let serde_val = serde_json::to_string(self).unwrap();
+
+        serde_json::to_string(&serde_val).expect("Unable to serialize TorbInput to JSON, this is a bug and should be reported to the project maintainer(s).")
+    }
+
+}
+
+#[derive(Debug, Clone)]
+pub struct TorbInputSpec {
+    typing: String,
+    default: TorbInput,
+    mapping: String,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ArtifactNodeRepr {
     #[serde(default = "String::new")]
@@ -52,9 +150,9 @@ pub struct ArtifactNodeRepr {
     #[serde(alias = "deploy")]
     pub deploy_steps: IndexMap<String, Option<IndexMap<String, String>>>,
     #[serde(default = "IndexMap::new")]
-    pub mapped_inputs: IndexMap<String, (String, String)>,
+    pub mapped_inputs: IndexMap<String, (String, TorbInput)>,
     #[serde(alias = "inputs", default = "IndexMap::new")]
-    pub input_spec: IndexMap<String, String>,
+    pub input_spec: IndexMap<String, TorbInputSpec>,
     #[serde(default = "Vec::new")]
     pub outputs: Vec<String>,
     #[serde(default = "Vec::new")]
@@ -71,12 +169,436 @@ pub struct ArtifactNodeRepr {
     #[serde(default = "String::new")]
     pub values: String,
     pub namespace: Option<String>,
-    pub source: Option<String>
+    pub source: Option<String>,
+}
+
+struct TorbInputDeserializer;
+impl<'de> Visitor<'de> for TorbInputDeserializer {
+    type Value = TorbInput;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        formatter.write_str("a numeric value.")
+    }
+
+    fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+        where
+            A: SeqAccess<'de>, {
+        let mut container = Vec::<TorbInput>::new();
+
+        loop {
+            let val_opt: Option<serde_yaml::Value> = seq.next_element()?;
+
+            if val_opt.is_some() {
+                let value = val_opt.unwrap();
+
+                let input = match value {
+                    serde_yaml::Value::String(val) => {
+                        TorbInput::String(val)
+                    }
+                    serde_yaml::Value::Bool(val) => {
+                        TorbInput::Bool(val)
+                    },
+                    serde_yaml::Value::Number(val) => {
+                        if val.is_f64() {
+                            TorbInput::Numeric(TorbNumeric::Float(val.as_f64().unwrap()))
+                        } else if val.is_u64() {
+                            TorbInput::Numeric(TorbNumeric::Int(val.as_u64().unwrap()))
+                        } else {
+                            TorbInput::Numeric(TorbNumeric::NegInt(val.as_i64().unwrap()))
+                        }
+                    },
+                    serde_yaml::Value::Null => {
+                        panic!("Null values not acceptable as element in type Array.")
+                    },
+                    serde_yaml::Value::Sequence(_) => {
+                        panic!("Nested Array types are not currently supported.")
+                    }
+                    serde_yaml::Value::Mapping(_val) => {
+                        panic!("Map types are not currently supported as array elements. (Or at all.)")
+                    }
+                };
+
+                container.push(input);
+            } else {
+                break;
+            }
+        }
+
+        let input = TorbInput::Array(container);
+
+        Ok(input)
+    }
+
+    fn visit_f32<E>(self, v: f32) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        Ok(TorbInput::Numeric(TorbNumeric::Float(v.into())))
+    }
+
+    fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        Ok(TorbInput::String(v.to_string()))
+    }
+
+    fn visit_string<E>(self, v: String) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        Ok(TorbInput::String(v))
+    }
+
+    fn visit_bool<E>(self, v: bool) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        Ok(TorbInput::Bool(v))
+    }
+
+    fn visit_f64<E>(self, v: f64) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        Ok(TorbInput::Numeric(TorbNumeric::Float(v.into())))
+    }
+
+    fn visit_u64<E>(self, v: u64) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        Ok(TorbInput::Numeric(TorbNumeric::Int(v.into())))
+    }
+    fn visit_u32<E>(self, v: u32) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        Ok(TorbInput::Numeric(TorbNumeric::Int(v.into())))
+    }
+    fn visit_u16<E>(self, v: u16) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        Ok(TorbInput::Numeric(TorbNumeric::Int(v.into())))
+    }
+
+    fn visit_u8<E>(self, v: u8) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        Ok(TorbInput::Numeric(TorbNumeric::Int(v.into())))
+    }
+
+    fn visit_i8<E>(self, v: i8) -> Result<Self::Value, E>
+        where
+            E: de::Error, {
+        if v > 0 {
+            panic!("Only for negatives.")
+        }
+        Ok(TorbInput::Numeric(TorbNumeric::NegInt(v.into())))
+    }
+    fn visit_i16<E>(self, v: i16) -> Result<Self::Value, E>
+        where
+            E: de::Error, {
+        if v > 0 {
+            panic!("Only for negatives.")
+        }
+        Ok(TorbInput::Numeric(TorbNumeric::NegInt(v.into())))
+    }
+    fn visit_i32<E>(self, v: i32) -> Result<Self::Value, E>
+        where
+            E: de::Error, {
+        if v > 0 {
+            panic!("Only for negatives.")
+        }
+        Ok(TorbInput::Numeric(TorbNumeric::NegInt(v.into())))
+    }
+    fn visit_i64<E>(self, v: i64) -> Result<Self::Value, E>
+        where
+            E: de::Error, {
+        if v > 0 {
+            panic!("Only for negatives.")
+        }
+        Ok(TorbInput::Numeric(TorbNumeric::NegInt(v.into())))
+    }
+}
+
+impl<'de> Deserialize<'de> for TorbInput {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_any(TorbInputDeserializer)
+    }
+}
+
+struct TorbInputSpecDeserializer;
+impl<'de> Visitor<'de> for TorbInputSpecDeserializer {
+    type Value = TorbInputSpec;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        formatter.write_str("a list.")
+    }
+
+    fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        let default = TorbInput::String(String::new());
+        let mapping = v.to_string();
+        let typing = "string".to_string();
+
+        Ok(TorbInputSpec {
+            typing,
+            default,
+            mapping,
+        })
+    }
+
+    fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+    where
+        A: SeqAccess<'de>,
+    {
+        let mut count = 0;
+        let mut typing = String::new();
+        let mut mapping = String::new();
+        let mut default = TorbInput::String(String::new());
+
+        if seq.size_hint().is_some() && seq.size_hint() != Some(3) {
+            return Err(de::Error::custom(format!(
+                "Didn't find the right sequence of values to create a TorbInputSpec."
+            )));
+        }
+
+        while count < 3 {
+            match count {
+                0 => {
+                    let value_opt = seq.next_element::<String>()?;
+
+                    let value = if !value_opt.is_some() {
+                        return Err(de::Error::custom(format!(
+                            "Didn't find the right sequence of values to create a TorbInputSpec."
+                        )));
+                    } else {
+                        value_opt.unwrap()
+                    };
+
+                    if !TYPES.contains(value.as_str()) {
+                        return Err(de::Error::custom(format!(
+                            "Please set a valid type for your input spec. Valid types are {:#?}. \n If you see this as a regular user, a unit author has included a broken spec.",
+                            TYPES
+                        )));
+                    }
+
+                    typing = value;
+                    count += 1;
+                }
+                1 => {
+                    match typing.as_str() {
+                        "bool" => {
+                            let value_opt = seq.next_element::<bool>()?;
+
+                            let value = if !value_opt.is_some() {
+                                return Err(de::Error::custom(format!(
+                                    "Didn't find the right sequence of values to create a TorbInputSpec."
+                                )));
+                            } else {
+                                value_opt.unwrap()
+                            };
+
+                            default = TorbInput::Bool(value);
+                        }
+                        "string" => {
+                            let value_opt = seq.next_element::<String>()?;
+
+                            let value = if !value_opt.is_some() {
+                                return Err(de::Error::custom(format!(
+                                    "Didn't find the right sequence of values to create a TorbInputSpec."
+                                )));
+                            } else {
+                                value_opt.unwrap()
+                            };
+
+                            default = TorbInput::String(value);
+                        }
+                        "array" => {
+                            let value = seq.next_element::<serde_yaml::Sequence>()?.unwrap();
+
+                            let mut new_vec = Vec::<TorbInput>::new();
+
+                            for ele in value.iter() {
+                                match ele {
+                                    serde_yaml::Value::Bool(val) => {
+                                        new_vec.push(TorbInput::Bool(val.clone()))
+                                    }
+                                    serde_yaml::Value::Number(val) => {
+                                        let numeric = if val.is_f64() {
+                                            TorbNumeric::Float(val.as_f64().unwrap())
+                                        } else if val.is_u64() {
+                                            TorbNumeric::Int(val.as_u64().unwrap())
+                                        } else {
+                                            TorbNumeric::NegInt(val.as_i64().unwrap())
+                                        };
+
+                                        new_vec.push(TorbInput::Numeric(numeric))
+                                    }
+                                    serde_yaml::Value::String(val) => {
+                                        new_vec.push(TorbInput::String(val.clone()))
+                                    }
+                                    _ => panic!("Typing was array, array elements are not a supported type. Supported array types are bool, numeric and string. Nesting is not supported.")
+                                }
+                            }
+
+                            default = TorbInput::Array(new_vec);
+                        }
+                        "numeric" => {
+                            let value = seq.next_element::<serde_yaml::Value>()?.unwrap();
+                            if let serde_yaml::Value::Number(val) = value {
+                                let numeric = if val.is_f64() {
+                                    TorbNumeric::Float(val.as_f64().unwrap())
+                                } else if val.is_u64() {
+                                    TorbNumeric::Int(val.as_u64().unwrap())
+                                } else {
+                                    TorbNumeric::NegInt(val.as_i64().unwrap())
+                                };
+                                default = TorbInput::Numeric(numeric);
+                            } else {
+                                panic!("Typing was numeric, default value was not numeric.")
+                            }
+
+                        }
+                        _ => {
+                            panic!("Type not supported by Torb! Supported types are String, Numeric, Array, Bool.")
+                        }
+                    }
+                    count += 1;
+                }
+                2 => {
+                    let value_opt = seq.next_element::<String>()?;
+
+                    let value = if !value_opt.is_some() {
+                        return Err(de::Error::custom(format!(
+                            "Didn't find the right sequence of values to create a TorbInputSpec."
+                        )));
+                    } else {
+                        value_opt.unwrap()
+                    };
+
+                    mapping = value;
+                    count += 1;
+                }
+                _ => {
+                    return Err(de::Error::custom(format!(
+                        "Didn't find the right sequence of values to create a TorbInputSpec."
+                    )));
+                }
+            }
+        }
+
+        let new_obj = TorbInputSpec {
+            typing,
+            mapping,
+            default,
+        };
+
+        Ok(new_obj)
+    }
+}
+
+impl<'de> Deserialize<'de> for TorbInputSpec {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_any(TorbInputSpecDeserializer)
+    }
+}
+
+impl Serialize for TorbInput {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: serde::Serializer {
+        
+        match self {
+            TorbInput::Numeric(val) => {
+                match val {
+                    TorbNumeric::Float(val) => {
+                        serializer.serialize_f64(val.clone())
+                    },
+                    TorbNumeric::Int(val) => {
+                        serializer.serialize_u64(val.clone())
+                    },
+                    TorbNumeric::NegInt(val) => {
+                        serializer.serialize_i64(val.clone())
+                    }
+                }
+            },
+            TorbInput::Array(val) => {
+                let len = val.len();
+                let mut seq = serializer.serialize_seq(Some(len))?;
+
+                for input in val.iter().cloned() {
+                    let expr = match input {
+                        TorbInput::String(val) => serde_yaml::Value::String(val),
+                        TorbInput::Bool(val) => serde_yaml::Value::Bool(val),
+                        TorbInput::Numeric(val) => {
+                            match val {
+                                TorbNumeric::Float(val) => serde_yaml::Value::Number(serde_yaml::Number::from(val)),
+                                TorbNumeric::Int(val) => serde_yaml::Value::Number(serde_yaml::Number::from(val)),
+                                TorbNumeric::NegInt(val) => serde_yaml::Value::Number(serde_yaml::Number::from(val))
+                            }
+                        }
+                        TorbInput::Array(_val) => {
+                            panic!("Nested array types are not supported.")
+                        }
+                    };
+
+                    seq.serialize_element(&expr)?;
+                }
+                seq.end()
+            },
+            TorbInput::String(val) => {
+                serializer.serialize_str(val)
+            },
+            TorbInput::Bool(val) => {
+                serializer.serialize_bool(val.clone())
+            }
+        }
+
+    }
+}
+
+impl Serialize for TorbInputSpec {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: serde::Serializer {
+        let mut seq = serializer.serialize_seq(Some(3))?;
+
+        let typing = self.typing.clone();
+        let default = self.default.clone();
+        let mapping = self.mapping.clone();
+
+        seq.serialize_element(&typing)?;
+        seq.serialize_element(&default)?;
+        seq.serialize_element(&mapping)?;
+        seq.end()
+        
+    }
 }
 
 impl ArtifactNodeRepr {
     pub fn display_name(&self) -> String {
-        kebab_to_snake_case(&self.name)
+        let name = self.mapped_inputs.get("name").map(|(_, input)| {
+            if let crate::artifacts::TorbInput::String(val) = input.clone() {
+                val
+            }
+            else {
+                self.name.clone()
+            }
+        }).or(Some(self.name.clone())).unwrap();
+
+        kebab_to_snake_case(&name)
     }
 
     #[allow(dead_code)]
@@ -89,15 +611,15 @@ impl ArtifactNodeRepr {
         init_step: Option<Vec<String>>,
         build_step: Option<BuildStep>,
         deploy_steps: IndexMap<String, Option<IndexMap<String, String>>>,
-        inputs: IndexMap<String, (String, String)>,
-        input_spec: IndexMap<String, String>,
+        inputs: IndexMap<String, (String, TorbInput)>,
+        input_spec: IndexMap<String, TorbInputSpec>,
         outputs: Vec<String>,
         file_path: String,
         stack_graph: Option<StackGraph>,
         files: Option<Vec<String>>,
         values: String,
         namespace: Option<String>,
-        source: Option<String>
+        source: Option<String>,
     ) -> ArtifactNodeRepr {
         ArtifactNodeRepr {
             fqn: fqn,
@@ -123,32 +645,44 @@ impl ArtifactNodeRepr {
             files,
             values,
             namespace,
-            source
+            source,
         }
     }
 
-    fn address_to_fqn(graph_name: &String, addr_result: Result<InputAddress, String>) -> Option<String> {
+    fn address_to_fqn(
+        graph_name: &String,
+        addr_result: Result<InputAddress, TorbInput>,
+    ) -> Option<String> {
         match addr_result {
             Ok(addr) => {
-                let fqn = format!("{}.{}.{}", graph_name, addr.node_type.clone(), addr.node_name.clone());
+                let fqn = format!(
+                    "{}.{}.{}",
+                    graph_name,
+                    addr.node_type.clone(),
+                    addr.node_name.clone()
+                );
 
                 Some(fqn)
-            },
-            Err(_s) => {
-                None
             }
+            Err(_s) => None,
         }
     }
 
-    pub fn discover_and_set_implicit_dependencies(&mut self, graph_name: &String) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn discover_and_set_implicit_dependencies(
+        &mut self,
+        graph_name: &String,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let mut implicit_deps_inputs = IndexSet::new();
 
-        let inputs_fn = |_spec: &String, val: Result<InputAddress, String>| -> String {
+        let inputs_fn = |_spec: &String, val: Result<InputAddress, TorbInput>| -> String {
             let fqn_option = ArtifactNodeRepr::address_to_fqn(graph_name, val);
 
             if fqn_option.is_some() {
                 let fqn = fqn_option.unwrap();
-                implicit_deps_inputs.insert(fqn);
+
+                if fqn != self.fqn {
+                    implicit_deps_inputs.insert(fqn);
+                }
             };
 
             "".to_string()
@@ -156,18 +690,21 @@ impl ArtifactNodeRepr {
 
         let mut implicit_deps_values = IndexSet::new();
 
-        let values_fn = |addr: Result<InputAddress, String>| -> String {
+        let values_fn = |addr: Result<InputAddress, TorbInput>| -> String {
             let fqn_option = ArtifactNodeRepr::address_to_fqn(graph_name, addr);
 
             if fqn_option.is_some() {
                 let fqn = fqn_option.unwrap();
-                implicit_deps_values.insert(fqn);
+                if fqn != self.fqn {
+                    implicit_deps_values.insert(fqn);
+                }
             };
 
             "".to_string()
         };
 
-        let (_, _) = InputResolver::resolve(&self, Some(values_fn), Some(inputs_fn))?;
+        let (_, _, _) =
+            InputResolver::resolve(&self, Some(values_fn), Some(inputs_fn), NO_INITS_FN)?;
 
         let unioned_deps = implicit_deps_inputs.union(&mut implicit_deps_values);
 
@@ -176,7 +713,7 @@ impl ArtifactNodeRepr {
         Ok(())
     }
 
-    pub fn validate_map_and_set_inputs(&mut self, inputs: IndexMap<String, String>) {
+    pub fn validate_map_and_set_inputs(&mut self, inputs: IndexMap<String, TorbInput>) {
         if !self.input_spec.is_empty() {
             let input_spec = &self.input_spec.clone();
 
@@ -203,17 +740,36 @@ impl ArtifactNodeRepr {
                 );
             }
 
-            self.mapped_inputs = IndexMap::<String, (String, String)>::new();
+            self.mapped_inputs = IndexMap::<String, (String, TorbInput)>::new();
         }
     }
 
     fn validate_inputs(
-        inputs: &IndexMap<String, String>,
-        spec: &IndexMap<String, String>,
+        inputs: &IndexMap<String, TorbInput>,
+        spec: &IndexMap<String, TorbInputSpec>,
     ) -> Result<(), String> {
-        for (key, _) in inputs.iter() {
+        for (key, val) in inputs.iter() {
             if !spec.contains_key(key) {
                 return Err(key.clone());
+            }
+
+            let input_spec = spec.get(key).unwrap();
+
+            let val_type = match val {
+                TorbInput::String(val) => match InputAddress::try_from(val.as_str()) {
+                    Ok(_) => "input_address",
+                    _ => "string",
+                },
+                TorbInput::Bool(_val) => "bool",
+                TorbInput::Numeric(_val) => "numeric",
+                TorbInput::Array(_val) => "array",
+            };
+
+            if val_type != "input_address" && input_spec.typing != val_type {
+                return Err(format!(
+                    "{key} is type {val_type} but is supposed to be {}",
+                    input_spec.typing
+                ));
             }
         }
 
@@ -221,14 +777,14 @@ impl ArtifactNodeRepr {
     }
 
     fn map_inputs(
-        inputs: &IndexMap<String, String>,
-        spec: &IndexMap<String, String>,
-    ) -> IndexMap<String, (String, String)> {
-        let mut mapped_inputs = IndexMap::<String, (String, String)>::new();
+        inputs: &IndexMap<String, TorbInput>,
+        spec: &IndexMap<String, TorbInputSpec>,
+    ) -> IndexMap<String, (String, TorbInput)> {
+        let mut mapped_inputs = IndexMap::<String, (String, TorbInput)>::new();
 
-        for (key, value) in inputs.iter() {
-            let spec_value = spec.get(key).unwrap();
-            mapped_inputs.insert(key.to_string(), (spec_value.to_string(), value.to_string()));
+        for (key, value) in spec.iter() {
+            let input = inputs.get(key).unwrap_or(&value.default);
+            mapped_inputs.insert(key.to_string(), (value.mapping.clone(), input.clone()));
         }
 
         mapped_inputs
@@ -247,7 +803,7 @@ pub struct ArtifactRepr {
     pub nodes: IndexMap<String, ArtifactNodeRepr>,
     pub namespace: Option<String>,
     pub release: Option<String>,
-    pub repositories: Option<Vec<String>>
+    pub repositories: Option<Vec<String>>,
 }
 
 impl ArtifactRepr {
@@ -260,7 +816,7 @@ impl ArtifactRepr {
         meta: Box<Option<ArtifactRepr>>,
         namespace: Option<String>,
         release: Option<String>,
-        repositories: Option<Vec<String>>
+        repositories: Option<Vec<String>>,
     ) -> ArtifactRepr {
         ArtifactRepr {
             torb_version,
@@ -273,7 +829,7 @@ impl ArtifactRepr {
             nodes: IndexMap::new(),
             namespace: namespace,
             release: release,
-            repositories
+            repositories,
         }
     }
 
@@ -341,7 +897,7 @@ fn walk_graph(graph: &StackGraph) -> Result<ArtifactRepr, Box<dyn std::error::Er
         meta,
         graph.namespace.clone(),
         graph.release.clone(),
-        graph.repositories.clone()
+        graph.repositories.clone(),
     );
 
     let mut node_map: IndexMap<String, ArtifactNodeRepr> = IndexMap::new();
@@ -350,24 +906,30 @@ fn walk_graph(graph: &StackGraph) -> Result<ArtifactRepr, Box<dyn std::error::Er
         let artifact_node_repr = walk_nodes(node, graph, &mut node_map);
         artifact.deploys.push(artifact_node_repr);
     }
-    
+
     artifact.nodes = node_map;
 
     Ok(artifact)
 }
 
-pub fn stack_into_artifact(meta: &Box<Option<ArtifactNodeRepr>>) -> Result<Box<Option<ArtifactRepr>>, Box<dyn std::error::Error>> {
+pub fn stack_into_artifact(
+    meta: &Box<Option<ArtifactNodeRepr>>,
+) -> Result<Box<Option<ArtifactRepr>>, Box<dyn std::error::Error>> {
     let unboxed_meta = meta.as_ref();
     match unboxed_meta {
         Some(meta) => {
             let artifact = walk_graph(&meta.stack_graph.clone().unwrap())?;
             Ok(Box::new(Some(artifact)))
-        },
-        None => { Ok(Box::new(None)) }
+        }
+        None => Ok(Box::new(None)),
     }
 }
 
-fn walk_nodes(node: &ArtifactNodeRepr, graph: &StackGraph, node_map: &mut IndexMap<String, ArtifactNodeRepr>) -> ArtifactNodeRepr {
+fn walk_nodes(
+    node: &ArtifactNodeRepr,
+    graph: &StackGraph,
+    node_map: &mut IndexMap<String, ArtifactNodeRepr>,
+) -> ArtifactNodeRepr {
     let mut new_node = node.clone();
 
     for fqn in new_node.implicit_dependency_fqns.iter() {
@@ -384,43 +946,51 @@ fn walk_nodes(node: &ArtifactNodeRepr, graph: &StackGraph, node_map: &mut IndexM
         new_node.dependencies.push(node_repr)
     }
 
-    new_node.dependency_names.projects.as_ref().map_or((), |projects| {
-        for project in projects {
-            let p_fqn = format!("{}.project.{}", graph.name.clone(), project.clone());
+    new_node
+        .dependency_names
+        .projects
+        .as_ref()
+        .map_or((), |projects| {
+            for project in projects {
+                let p_fqn = format!("{}.project.{}", graph.name.clone(), project.clone());
 
-            if !new_node.implicit_dependency_fqns.contains(&p_fqn) {
-                let p_node = graph.projects.get(&p_fqn).unwrap();
-                let p_node_repr = walk_nodes(p_node, graph, node_map);
+                if !new_node.implicit_dependency_fqns.contains(&p_fqn) {
+                    let p_node = graph.projects.get(&p_fqn).unwrap();
+                    let p_node_repr = walk_nodes(p_node, graph, node_map);
 
-                new_node.dependencies.push(p_node_repr);
+                    new_node.dependencies.push(p_node_repr);
+                }
             }
-        }
-    });
+        });
 
-    new_node.dependency_names.services.as_ref().map_or((), |services| {
-        for service in services {
-            let s_fqn = format!("{}.service.{}", graph.name.clone(), service.clone());
+    new_node
+        .dependency_names
+        .services
+        .as_ref()
+        .map_or((), |services| {
+            for service in services {
+                let s_fqn = format!("{}.service.{}", graph.name.clone(), service.clone());
 
-            if !new_node.implicit_dependency_fqns.contains(&s_fqn) {
-                let s_node = graph.services.get(&s_fqn).unwrap();
-                let s_node_repr = walk_nodes(s_node, graph, node_map);
+                if !new_node.implicit_dependency_fqns.contains(&s_fqn) {
+                    let s_node = graph.services.get(&s_fqn).unwrap();
+                    let s_node_repr = walk_nodes(s_node, graph, node_map);
 
-                new_node.dependencies.push(s_node_repr);
+                    new_node.dependencies.push(s_node_repr);
+                }
             }
-        }
-    });
+        });
 
     node_map.insert(node.fqn.clone(), new_node.clone());
 
     return new_node;
 }
 
-
-pub fn load_build_file(filename: String) -> Result<(String, String, ArtifactRepr), Box<dyn std::error::Error>> {
+pub fn load_build_file(
+    filename: String,
+) -> Result<(String, String, ArtifactRepr), Box<dyn std::error::Error>> {
     let buildstate_path = buildstate_path_or_create();
     let buildfiles_path = buildstate_path.join("buildfiles");
     let path = buildfiles_path.join(filename.clone());
-
 
     let file = std::fs::File::open(path)?;
 
@@ -438,13 +1008,17 @@ pub fn load_build_file(filename: String) -> Result<(String, String, ArtifactRepr
     }
 }
 
-pub fn deserialize_stack_yaml_into_artifact(stack_yaml: &String) -> Result<ArtifactRepr, Box<dyn std::error::Error>> {
+pub fn deserialize_stack_yaml_into_artifact(
+    stack_yaml: &String,
+) -> Result<ArtifactRepr, Box<dyn std::error::Error>> {
     let graph: StackGraph = resolve_stack(stack_yaml)?;
     let artifact = walk_graph(&graph)?;
     Ok(artifact)
 }
 
-pub fn get_build_file_info(artifact: &ArtifactRepr) -> Result<(String, String, String), Box<dyn std::error::Error>> {
+pub fn get_build_file_info(
+    artifact: &ArtifactRepr,
+) -> Result<(String, String, String), Box<dyn std::error::Error>> {
     let string_rep = serde_yaml::to_string(&artifact).unwrap();
     let hash = Sha256::digest(string_rep.as_bytes());
     let hash_base32 = BASE32.encode(&hash);
@@ -473,7 +1047,6 @@ pub fn write_build_file(stack_yaml: String) -> (String, String, ArtifactRepr) {
             .and_then(|mut f| f.write(&artifact_as_string.as_bytes()))
             .expect("Failed to create buildfile.");
     }
-
 
     (hash_base32, filename, artifact)
 }

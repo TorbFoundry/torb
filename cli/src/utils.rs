@@ -70,8 +70,13 @@ pub fn for_each_artifact_repository(mut closure: Box<dyn FnMut(std::path::PathBu
 
 pub fn run_command_in_user_shell(
     command_str: String,
+    shell_override: Option<String>
 ) -> Result<std::process::Output, Box<dyn std::error::Error>> {
-    let shell = std::env::var("SHELL").unwrap();
+    let shell = match shell_override {
+        Some(sh) => sh,
+        None => std::env::var("SHELL").unwrap()
+    };
+
     let shell_args = vec!["-c".to_string(), command_str.to_string()];
 
     let mut command = std::process::Command::new(shell.clone());

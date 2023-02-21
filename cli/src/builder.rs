@@ -49,7 +49,9 @@ impl<'a> StackBuilder<'a> {
     fn build_node(&self, node: &ArtifactNodeRepr) -> Result<(), TorbBuilderErrors> {
         if let Some(step) = node.build_step.clone() {
             if step.dockerfile != "" {
-                self.build_docker(&node.name, step.dockerfile, step.tag, step.registry)
+                let name = node.display_name();
+
+                self.build_docker(&name, step.dockerfile, step.tag, step.registry)
                     .and_then(|_| Ok(()))
             } else if step.script_path != "" {
                 self.build_script(step.script_path).and_then(|_| Ok(()))
@@ -144,7 +146,7 @@ impl<'a> StackBuilder<'a> {
 
             let script_string = lines.join(";");
 
-            run_command_in_user_shell(script_string).map_err(|err| {
+            run_command_in_user_shell(script_string, None).map_err(|err| {
                 TorbBuilderErrors::UnableToBuildBuildScript {
                     response: err.to_string(),
                 }
