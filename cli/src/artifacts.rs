@@ -765,7 +765,7 @@ impl ArtifactNodeRepr {
                 TorbInput::Array(_val) => "array",
             };
 
-            if val_type != "address" && input_spec.typing != val_type {
+            if val_type != "input_address" && input_spec.typing != val_type {
                 return Err(format!(
                     "{key} is type {val_type} but is supposed to be {}",
                     input_spec.typing
