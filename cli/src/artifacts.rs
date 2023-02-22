@@ -1,3 +1,14 @@
+# Business Source License 1.1
+# Licensor:  Torb Foundry
+# Licensed Work:  Torb v0.3.0-02.22
+# The Licensed Work is © 2023-Present Torb Foundry
+#
+# Change License: GNU Affero General Public License Version 3
+# Additional Use Grant: None
+# Change Date: Feb 22, 2023
+#
+# See LICENSE file at https://github.com/TorbFoundry/torb/blob/main/LICENSE for details.
+
 use crate::composer::InputAddress;
 use crate::resolver::inputs::{InputResolver, NO_INITS_FN};
 use crate::resolver::{resolve_stack, NodeDependencies, StackGraph};

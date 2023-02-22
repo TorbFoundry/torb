@@ -1,3 +1,14 @@
+# Business Source License 1.1
+# Licensor:  Torb Foundry
+# Licensed Work:  Torb v0.3.0-02.22
+# The Licensed Work is © 2023-Present Torb Foundry
+#
+# Change License: GNU Affero General Public License Version 3
+# Additional Use Grant: None
+# Change Date: Feb 22, 2023
+#
+# See LICENSE file at https://github.com/TorbFoundry/torb/blob/main/LICENSE for details.
+
 use crate::artifacts::{ArtifactNodeRepr, ArtifactRepr, TorbInput, TorbNumeric};
 use crate::resolver::inputs::{InputResolver, NO_INPUTS_FN, NO_VALUES_FN, NO_INITS_FN};
 use crate::utils::{buildstate_path_or_create, for_each_artifact_repository, torb_path, kebab_to_snake_case, snake_case_to_kebab};

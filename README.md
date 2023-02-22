@@ -46,7 +46,7 @@ Currently this doesn't happen under an organization, but that is on the list of 
 
 **Note: Providing the full path for the local repo instead of just a name is currently required.**
 
-	torb repo create ~/example/path/to/new_repo
+    torb repo create ~/example/path/to/new_repo
 
 This will create a local repo `new_repo` at the path provided and handle everything listed above.
 
@@ -60,7 +60,7 @@ First change directory into the repo where you'd like the stack to live.
 
 Next list the available stacks with:
 
-	torb stack list
+    torb stack list
 
 This will output something like:
 
@@ -75,7 +75,7 @@ For this example we're going to choose `Flask App w/ React Frontend`
 
 Run:
 
-	torb stack checkout 'Flask App w/ React Frontend'
+    torb stack checkout 'Flask App w/ React Frontend'
 
 **Note: Depending on your shell you may need different quotes for names with spaces.**
 
@@ -162,7 +162,7 @@ After you've checked out a stack you need to initialize it before you can procee
 
 To initialize your stack run:
 
-	torb stack init stack.yaml
+    torb stack init stack.yaml
 
 With the stack that we're using your repo will look something like this:
 
@@ -218,7 +218,7 @@ If you're running a kubernetes cluster on a remote server you will need to make 
 
 To build your stack run
 
-	torb stack build stack.yaml
+    torb stack build stack.yaml
 
 Expect the first build to take some time as this will be building the docker images from scratch.
 
@@ -249,7 +249,7 @@ Longer term we may work on something to replace using Helm while trying to suppo
 
 To deploy with Torb run
 
-	torb stack deploy stack.yaml
+    torb stack deploy stack.yaml
 
 You should see Terraform initialize a workspace and begin to apply a plan.
 
