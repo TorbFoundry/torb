@@ -33,6 +33,7 @@ pub struct StackBuilder<'a> {
     built: IndexSet<String>,
     dryrun: bool,
     build_platforms: String,
+    separate_local_registry: bool
 }
 
 impl<'a> StackBuilder<'a> {
@@ -40,12 +41,14 @@ impl<'a> StackBuilder<'a> {
         artifact: &'a ArtifactRepr,
         build_platforms: String,
         dryrun: bool,
+        separate_local_registry: bool
     ) -> StackBuilder<'a> {
         StackBuilder {
             artifact: artifact,
             built: IndexSet::new(),
             dryrun: dryrun,
             build_platforms: build_platforms,
+            separate_local_registry
         }
     }
 
@@ -60,7 +63,7 @@ impl<'a> StackBuilder<'a> {
     fn build_node(&self, node: &ArtifactNodeRepr) -> Result<(), TorbBuilderErrors> {
         if let Some(step) = node.build_step.clone() {
             if step.dockerfile != "" {
-                let name = node.display_name();
+                let name = node.display_name(None);
 
                 self.build_docker(&name, step.dockerfile, step.tag, step.registry)
                     .and_then(|_| Ok(()))
@@ -89,31 +92,56 @@ impl<'a> StackBuilder<'a> {
         } else {
             format!("{}:{}", name, tag)
         };
-
+        // Todo(Ian): Refactor this to not be so ugly when you feel like dealing with the lifetimes. 
         let commands = if registry != "local" {
-            vec![
-                CommandConfig::new(
-                    "docker",
-                    vec![
-                        "buildx",
-                        "build",
-                        "--platform",
-                        &self.build_platforms,
-                        "-t",
-                        &label,
-                        ".",
-                        "-f",
-                        &dockerfile,
-                        "--push"
-                    ],
-                    Some(&dockerfile_dir.to_str().unwrap()),
-                ),
-            ]
+            if self.separate_local_registry {
+                vec![
+                    CommandConfig::new(
+                        "docker",
+                        vec![
+                            "buildx",
+                            "--builder",
+                            "default",
+                            "build",
+                            "-t",
+                            &label,
+                            ".",
+                            "-f",
+                            &dockerfile,
+                            "--push"
+                        ],
+                        Some(&dockerfile_dir.to_str().unwrap()),
+                    ),
+                ]
+            } else {
+                vec![
+                    CommandConfig::new(
+                        "docker",
+                        vec![
+                            "buildx",
+                            "--builder",
+                            "torb_builder",
+                            "build",
+                            "--platform",
+                            &self.build_platforms,
+                            "-t",
+                            &label,
+                            ".",
+                            "-f",
+                            &dockerfile,
+                            "--push"
+                        ],
+                        Some(&dockerfile_dir.to_str().unwrap()),
+                    ),
+                ]
+            }
         } else {
             vec![CommandConfig::new(
                 "docker",
                 vec![
                     "buildx",
+                    "--builder",
+                    "torb_builder",
                     "build",
                     "-t",
                     &label,
@@ -133,11 +161,13 @@ impl<'a> StackBuilder<'a> {
         } else {
             let mut pipeline = CommandPipeline::new(Some(commands));
 
-            pipeline
+            let out = pipeline
                 .execute()
                 .map_err(|err| TorbBuilderErrors::UnableToBuildDockerfile {
                     response: err.to_string(),
-                })
+                });
+
+            out
         }
     }
 

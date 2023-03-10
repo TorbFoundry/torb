@@ -107,6 +107,7 @@ pub fn cli() -> Command<'static> {
                         .arg(
                             Arg::new("--dryrun")
                                 .short('d')
+                                .long("dryrun")
                                 .takes_value(false)
                                 .help("Dry run. Don't actually build the stack."),
                         )
@@ -117,6 +118,13 @@ pub fn cli() -> Command<'static> {
                                 .help(
                                     "Comma separated list of platforms to build docker images for.",
                                 ),
+                        )
+                        .arg(
+                            Arg::new("--local-hosted-registry")
+                                .short('l')
+                                .long("local-hosted-registry")
+                                .takes_value(false)
+                                .help("Runs the builder with the docker driver to push to a separate registry hosted on localhost (or an address pointing to localhost)"),
                         ),
                 )
                 .subcommand(
@@ -132,8 +140,27 @@ pub fn cli() -> Command<'static> {
                         .arg(
                             Arg::new("--dryrun")
                                 .short('d')
+                                .long("dryrun")
                                 .takes_value(false)
                                 .help("Dry run. Don't actually deploy the stack."),
+                        ),
+                )
+                .subcommand(
+                    SubCommand::with_name("watch")
+                        .about("Watch files for changes and re-build and redeploy to cluster.")
+                        .arg(
+                            Arg::with_name("file")
+                                .takes_value(true)
+                                .required(true)
+                                .index(1)
+                                .help("File path of the stack definition file."),
+                        )
+                        .arg(
+                            Arg::new("--local-hosted-registry")
+                                .short('l')
+                                .long("local-hosted-registry")
+                                .takes_value(false)
+                                .help("Runs the builder with the docker driver to push to a separate registry hosted on localhost (or an address pointing to localhost)"),
                         ),
                 )
                 .subcommand(SubCommand::with_name("list").about("List all available stacks.")),

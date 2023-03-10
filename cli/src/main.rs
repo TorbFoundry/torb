@@ -19,6 +19,7 @@ mod initializer;
 mod resolver;
 mod utils;
 mod vcs;
+mod watcher;
 
 use indexmap::IndexMap;
 use rayon::prelude::*;
@@ -40,7 +41,9 @@ use crate::composer::Composer;
 use crate::config::TORB_CONFIG;
 use crate::deployer::StackDeployer;
 use crate::initializer::StackInitializer;
+use crate::utils::{CommandConfig, CommandPipeline};
 use crate::vcs::{GitVersionControl, GithubVCS};
+use crate::watcher::{Watcher};
 
 const VERSION: &'static str = env!("CARGO_PKG_VERSION");
 
@@ -107,6 +110,26 @@ fn init() {
         unzip_cmd.arg(&tf_path).current_dir(&torb_path);
 
         let _unzip_cmd_out = unzip_cmd.output().expect("Failed to unzip terraform.");
+    }
+
+    let buildx_cmd_conf = CommandConfig::new(
+        "docker",
+        vec![
+            "buildx",
+            "create",
+            "--name",
+            "torb_builder",
+            "--driver-opt",
+            "network=host",
+        ],
+        None
+    );
+
+    let res = CommandPipeline::execute_single(buildx_cmd_conf);
+
+    match res {
+        Ok(_) => println!("Created docker build kit builder, torb_builder."),
+        Err(err) => panic!("{}", err)
     }
 
     println!("Finished!")
@@ -186,8 +209,9 @@ fn run_dependency_build_steps(
     build_artifact: &ArtifactRepr,
     build_platform_string: String,
     dryrun: bool,
+    separate_local_registry: bool
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let mut builder = StackBuilder::new(build_artifact, build_platform_string, dryrun);
+    let mut builder = StackBuilder::new(build_artifact, build_platform_string, dryrun, separate_local_registry);
 
     builder.build()
 }
@@ -200,6 +224,12 @@ fn run_deploy_steps(
     let mut deployer = StackDeployer::new();
 
     deployer.deploy(build_artifact, dryrun)
+}
+
+fn watch(fp_opt: Option<&str>, local_registry: bool) {
+    let watcher = Watcher::configure(fp_opt.unwrap_or("stack.yaml").to_string(), local_registry);
+
+    watcher.start();
 }
 
 fn clone_artifacts() {
@@ -424,7 +454,9 @@ fn main() {
                 Some("build") => {
                     subcommand = subcommand.subcommand_matches("build").unwrap();
                     let file_path_option = subcommand.value_of("file");
-                    let dryrun_option = subcommand.value_of("--dryrun");
+                    let dryrun = subcommand.is_present("--dryrun");
+                    let local_registry = subcommand.is_present("--local-hosted-registry");
+
                     let build_platforms_string = subcommand
                         .values_of("--platforms")
                         .unwrap()
@@ -446,8 +478,9 @@ fn main() {
                         run_dependency_build_steps(
                             build_hash.clone(),
                             &build_artifact,
-                            build_platforms_string,
-                            dryrun_option.is_some(),
+                        build_platforms_string,
+                            dryrun,
+                            local_registry
                         )
                         .expect("Unable to build required images/artifacts for nodes.");
 
@@ -457,7 +490,7 @@ fn main() {
                 Some("deploy") => {
                     subcommand = subcommand.subcommand_matches("deploy").unwrap();
                     let file_path_option = subcommand.value_of("file");
-                    let dryrun_option = subcommand.value_of("--dryrun");
+                    let dryrun = subcommand.is_present("--dryrun");
 
                     if let Some(file_path) = file_path_option {
                         println!("Attempting to read and deploy stack: {}", file_path);
@@ -476,10 +509,16 @@ fn main() {
                         run_deploy_steps(
                             build_hash.clone(),
                             &build_artifact,
-                            dryrun_option.is_some(),
+                            dryrun,
                         )
                         .expect("Unable to deploy required images/artifacts for nodes.");
                     }
+                }
+                Some("watch") => {
+                    subcommand = subcommand.subcommand_matches("watch").unwrap();
+                    let file_path_option = subcommand.value_of("file");
+                    let has_local_registry= subcommand.is_present("--local-hosted-registry");
+                    watch(file_path_option, has_local_registry);
                 }
                 Some("list") => {
                     println!("\nTorb Stacks:\n");

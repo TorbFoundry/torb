@@ -43,11 +43,6 @@ impl StackDeployer {
         println!("{}", std::str::from_utf8(&out.stdout).unwrap());
         println!("{}", std::str::from_utf8(&out.stderr).unwrap());
 
-        // if artifact.meta.as_ref().is_some() {
-        //     println!("Deploying meta...");
-        //     self.deploy_meta(&artifact.meta, dryrun)?;
-        // }
-
         let out = self.deploy_tf(dryrun).expect("Failed to plan and deploy terraform.");
         println!("{}", std::str::from_utf8(&out.stdout).unwrap());
         println!("{}", std::str::from_utf8(&out.stderr).unwrap());
@@ -82,7 +77,6 @@ impl StackDeployer {
         cmd.arg(format!("-chdir={}", iac_env_path.to_str().unwrap()))
             .arg("plan")
             .arg("-out=./tfplan");
-            // .arg("-detailed-exitcode");
 
         cmd.current_dir(&torb_path);
 
@@ -92,9 +86,6 @@ impl StackDeployer {
 
         if !out.status.success() {
             let err_resp = std::str::from_utf8(&out.stderr).unwrap();
-            println!("{}", std::str::from_utf8(&out.stderr).unwrap());
-            println!("{}", std::str::from_utf8(&out.stderr).unwrap());
-            println!("{}", std::str::from_utf8(&out.stderr).unwrap());
             let err = TorbDeployerErrors::FailedToPlan {
                 command: cmd,
                 response: err_resp.to_string(),
