@@ -9,10 +9,13 @@
 //
 // See LICENSE file at https://github.com/TorbFoundry/torb/blob/main/LICENSE for details.
 
-use crate::artifacts::{deserialize_stack_yaml_into_artifact, ArtifactRepr};
+use crate::artifacts::{write_build_file, ArtifactRepr};
 use crate::builder::StackBuilder;
 // use crate::deployer::StackDeployer;
 use crate::utils::{CommandConfig, get_resource_kind, ResourceKind, CommandPipeline};
+use crate::composer::Composer;
+use crate::deployer::StackDeployer;
+use crate::utils::{buildstate_path_or_create};
 
 use tokio::{
     sync::mpsc::{channel, Receiver},
@@ -48,7 +51,9 @@ pub struct Watcher {
     pub interval: u64,
     pub patch: bool,
     pub artifact: Arc<ArtifactRepr>,
-    internal: Arc<WatcherInternal>
+    pub build_hash: String,
+    pub build_filename: String,
+    internal: Arc<WatcherInternal>,
 }
 
 struct WatcherInternal {
@@ -68,7 +73,7 @@ impl WatcherInternal {
                 queue.clear();
                 queue.shrink_to(10);
 
-                let build_platforms = "linux/amd64,linux/arm64".to_string();
+                let build_platforms = "".to_string();
 
                 let mut builder = StackBuilder::new(&artifact, build_platforms, false, self.separate_local_registry.clone());
 
@@ -118,16 +123,16 @@ impl Watcher {
         let contents = std::fs::read_to_string(file_path)
             .expect("Something went wrong reading the stack file.");
 
-        let artifact = deserialize_stack_yaml_into_artifact(&contents)
-            .expect("Unable to read stack file into internal representation.");
+        let location = std::path::Path::new("/tmp").to_path_buf();
 
+        let (build_hash, build_filename, artifact) = write_build_file(contents, Some(&location));
         let watcher = artifact.watcher.clone();
 
 
-        Watcher::new(watcher.paths, artifact, Some(watcher.interval), Some(watcher.patch), local_registry)
+        Watcher::new(watcher.paths, artifact, Some(watcher.interval), Some(watcher.patch), local_registry, build_hash, build_filename)
     }
 
-    fn new(paths: Vec<String>, artifact: ArtifactRepr, interval: Option<u64>, patch: Option<bool>, local_registry: bool) -> Self {
+    fn new(paths: Vec<String>, artifact: ArtifactRepr, interval: Option<u64>, patch: Option<bool>, local_registry: bool, build_hash: String, build_filename: String) -> Self {
         let interval = interval.unwrap_or(3000);
         let patch = patch.unwrap_or(true);
         let mut bufs = Vec::new();
@@ -144,11 +149,42 @@ impl Watcher {
             interval,
             patch,
             artifact: Arc::new(artifact),
+            build_hash,
+            build_filename,
             internal
         }
     }
 
+    fn setup_stack(&mut self) {
+        let build_platforms = "".to_string();
+
+        let mut builder = StackBuilder::new(&self.artifact, build_platforms, false, self.internal.separate_local_registry.clone());
+
+        builder.build().expect("Failed to build stack during watcher redeploy.");
+
+        let mut composer = Composer::new(self.build_hash.clone(), &self.artifact, self.patch.clone());
+        composer.compose().unwrap();
+
+        let mut deployer = StackDeployer::new(true);
+
+        deployer.deploy(&self.artifact, false).expect("Unable to deploy watcher stack.");
+
+
+        let buildstate_path = buildstate_path_or_create();
+        let non_watcher_iac = buildstate_path.join("iac_environment");
+        let watcher_iac = buildstate_path.join("watcher_iac_environment");
+        let tf_state_path = watcher_iac.join("terraform.tfstate");
+
+        if tf_state_path.exists() {
+            let new_path = non_watcher_iac.join("terraform.tfstate");
+            std::fs::copy(tf_state_path, new_path).expect("Failed to copy supporting build file.");
+        };
+    }
+
     pub fn start(mut self) {
+        self.setup_stack();
+
+
         let rt = Runtime::new().unwrap();
         let interval = self.interval.clone();
 

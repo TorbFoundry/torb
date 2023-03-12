@@ -1049,13 +1049,19 @@ pub fn get_build_file_info(
     Ok((hash_base32, filename, string_rep))
 }
 
-pub fn write_build_file(stack_yaml: String) -> (String, String, ArtifactRepr) {
+pub fn write_build_file(stack_yaml: String, location: Option<&std::path::PathBuf>) -> (String, String, ArtifactRepr) {
     let artifact = deserialize_stack_yaml_into_artifact(&stack_yaml).unwrap();
     let current_dir = std::env::current_dir().unwrap();
     let current_dir_state_dir = current_dir.join(".torb_buildstate");
     let outfile_dir_path = current_dir_state_dir.join("buildfiles");
+
     let (hash_base32, filename, artifact_as_string) = get_build_file_info(&artifact).unwrap();
-    let outfile_path = outfile_dir_path.join(&filename);
+    let outfile_path = match location {
+        Some(loc) => {
+            loc.join(&filename)
+        },
+        None => outfile_dir_path.join(&filename)
+    };
 
     if !outfile_dir_path.is_dir() {
         fs::create_dir(&outfile_dir_path).expect("Failed to create buildfile directory.");

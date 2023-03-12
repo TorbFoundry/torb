@@ -200,7 +200,7 @@ fn init_stack(file_path: String) {
 }
 
 fn compose_build_environment(build_hash: String, build_artifact: &ArtifactRepr) {
-    let mut composer = Composer::new(build_hash, build_artifact);
+    let mut composer = Composer::new(build_hash, build_artifact, false);
     composer.compose().unwrap();
 }
 
@@ -221,7 +221,7 @@ fn run_deploy_steps(
     build_artifact: &ArtifactRepr,
     dryrun: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let mut deployer = StackDeployer::new();
+    let mut deployer = StackDeployer::new(false);
 
     deployer.deploy(build_artifact, dryrun)
 }
@@ -470,7 +470,7 @@ fn main() {
                         let contents = fs::read_to_string(file_path)
                             .expect("Something went wrong reading the stack file.");
 
-                        let (build_hash, build_filename, _) = write_build_file(contents);
+                        let (build_hash, build_filename, _) = write_build_file(contents, None);
 
                         let (_, _, build_artifact) =
                             load_build_file(build_filename).expect("Unable to load build file.");

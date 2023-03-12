@@ -15,6 +15,7 @@ use crate::utils::{buildstate_path_or_create, for_each_artifact_repository, torb
 
 use hcl::{Block, Body, Expression, Object, ObjectKey, RawExpression, Number};
 use serde::{Deserialize, Serialize};
+use serde_yaml::{Mapping, Value};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
@@ -173,10 +174,11 @@ pub struct Composer<'a> {
     release_name: String,
     main_struct: hcl::BodyBuilder,
     artifact_repr: &'a ArtifactRepr,
+    watcher_patch: bool
 }
 
 impl<'a> Composer<'a> {
-    pub fn new(hash: String, artifact_repr: &ArtifactRepr) -> Composer {
+    pub fn new(hash: String, artifact_repr: &ArtifactRepr, watcher_patch: bool) -> Composer {
         Composer {
             hash: hash,
             build_files_seen: IndexSet::new(),
@@ -184,6 +186,7 @@ impl<'a> Composer<'a> {
             release_name: artifact_repr.release(),
             main_struct: Body::builder(),
             artifact_repr: artifact_repr,
+            watcher_patch: watcher_patch
         }
     }
 
@@ -259,10 +262,18 @@ impl<'a> Composer<'a> {
         )
     }
 
+    fn iac_environment_path(&self) -> std::path::PathBuf {
+        let buildstate_path = buildstate_path_or_create();
+        if self.watcher_patch {
+            buildstate_path.join("watcher_iac_environment")
+        } else {
+            buildstate_path.join("iac_environment")
+        }
+    }
+
     pub fn compose(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         println!("Composing build environment...");
-        let buildstate_path = buildstate_path_or_create();
-        let environment_path = buildstate_path.join("iac_environment");
+        let environment_path = self.iac_environment_path();
 
         if !environment_path.exists() {
             std::fs::create_dir(environment_path)?;
@@ -287,9 +298,7 @@ impl<'a> Composer<'a> {
         for_each_artifact_repository(Box::new(|repos_path, repo| {
             let repo_path = repos_path.join(repo.file_name());
             let source_path = repo_path.join("common");
-            let buildstate_path = buildstate_path_or_create();
-
-            let new_environment_path = buildstate_path.join("iac_environment");
+            let new_environment_path = self.iac_environment_path();
 
             let repo_name = repo.file_name().into_string().unwrap();
             let namespace_dir = kebab_to_snake_case(&repo_name);
@@ -335,8 +344,8 @@ impl<'a> Composer<'a> {
 
     fn write_main_buildfile(&mut self) -> Result<std::path::PathBuf, Box<dyn std::error::Error>> {
         let builder = std::mem::take(&mut self.main_struct);
-        let buildstate_path = buildstate_path_or_create();
-        let environment_path = buildstate_path.join("iac_environment");
+        let environment_path = self.iac_environment_path();
+
         let main_tf_path = environment_path.join("main.tf");
 
         let built_content = builder.build();
@@ -421,8 +430,7 @@ impl<'a> Composer<'a> {
         &mut self,
         node: &ArtifactNodeRepr,
     ) -> Result<bool, Box<dyn std::error::Error>> {
-        let buildstate_path = buildstate_path_or_create();
-        let environment_path = buildstate_path.join("iac_environment");
+        let environment_path = self.iac_environment_path();
         let node_source = node.source.clone().unwrap();
         let namespace_dir = kebab_to_snake_case(&node_source);
         let repo_path = environment_path.join(namespace_dir);
@@ -675,6 +683,18 @@ impl<'a> Composer<'a> {
 
         if mapped_values.clone().unwrap() != "---\n~\n" {
             values.push(mapped_values.expect("Unable to resolve values field."));
+        }
+
+        if self.watcher_patch {
+            let mut image_pull_policy_map = Mapping::new();
+            let mut nested_image_pull_policy_map = Mapping::new();
+            nested_image_pull_policy_map.insert(Value::String("pullPolicy".into()), Value::String("Always".into()));
+            image_pull_policy_map.insert(Value::String("image".into()), Value::Mapping(nested_image_pull_policy_map));
+
+            let patch_value = Value::Mapping(image_pull_policy_map);
+            let patch_yaml = serde_yaml::to_string(&patch_value)?;
+
+            values.push(patch_yaml);
         }
 
         let mut builder = std::mem::take(&mut self.main_struct);
