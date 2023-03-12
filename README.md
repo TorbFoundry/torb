@@ -71,11 +71,11 @@ Torb Stacks:
 - Rook Ceph Cluster
 ```
 
-For this example we're going to choose `Flask App w/ React Frontend`
+For this example we're going to choose `flask-react`
 
 Run:
 
-    torb stack checkout 'Flask App w/ React Frontend'
+    torb stack checkout flask-react
 
 **Note: Depending on your shell you may need different quotes for names with spaces.**
 
@@ -121,9 +121,6 @@ projects:
     build:
       tag: latest
       registry: ""
-    deps:
-      services:
-        - postgres_1
   createreactapp_1:
     project: createreactapp
     inputs:
@@ -144,8 +141,6 @@ projects:
       tag: latest
       registry: ""
     deps:
-      projects:
-        - flaskapp_1
       services:
         - nginx_ingress_controller_1
 ```
@@ -171,11 +166,12 @@ With the stack that we're using your repo will look something like this:
 createreactapp flaskapp       flaskapp_venv  stack.yaml
 ```
 
-Each folder is the name of the unit in [Torb Artifacts](https://github.com/TorbFoundry/torb-artifacts), eventually you'll be able to name these whatever you want but for now they have to match the unit name. 
+You'll need to install npm and node for this tutorial, if you don't already have recent versions you can follow their [guide](https://docs.npmjs.com/downloading-and-installing-node-js-and-npm)
 
-Depending on the unit, such as this react app, you'll need to build the artifact like `npm build` before you are able to deploy. Go ahead and change directory into `createreactapp` and run `npm run build`. Torb will not install programming languages, libraries or anything else for working with projects so make sure you have these things installed.
+Each folder is the name of the unit in [Torb Artifacts](https://github.com/TorbFoundry/torb-artifacts)
 
-If you need to install npm and node for this tutorial, you can follow their [guide](https://docs.npmjs.com/downloading-and-installing-node-js-and-npm)
+Depending on the unit, you'll need to build the artifact like `npm build` before you are able to deploy. Go ahead and change directory into `createreactapp` and run `npm run build`. Torb will not install programming languages, libraries or anything else for working with projects so make sure you have these things installed.
+
 
 Next we'll look at building and deploying.
 
@@ -212,13 +208,15 @@ You can see in the above unit that build is configured to tag the docker image w
 
 If you just want to have the image locally and skip pushing to a registry you can change registry to `local`. This is useful is you're running a kubernetes cluster that can read your local docker images like the cluster that can be enabled with Docker Destkop on mac and wsl. 
 
-If you're running a kubernetes cluster on a remote server you will need to make sure the appropriate registry is configured here and that you are authenticated to it as this will also be used to pull the image on your cluster later on.
+If you're running a kubernetes cluster on a remote server you will need to make sure the appropriate registry is configured here and that you are authenticated to it as this will also be used to pull the image on your cluster later on. 
 
 **Note: If you're using Minikube you will either need to use remote registry or load the local image with `minikube image load <IMAGE_NAME>`**
 
 To build your stack run
 
     torb stack build stack.yaml
+
+**Note: If your image registry is a separate locally hosted service like the one found in our quickstart stack you will need to pass `--local-hosted-registry`
 
 Expect the first build to take some time as this will be building the docker images from scratch.
 
@@ -237,7 +235,7 @@ Torb respects the `KUBECONFIG` env var and if that is not set we default to `~/.
 
 Deploys respect the dependency ordering set in the `stack.yaml` we use the same method for detecing implicit and explicit depencies in Torb.
 
-There are some tricky aspects of the deploy, we rely on the `helm provider` in Terraform and Helm in general to deploy to Kube. Helm itself is a good tool and handles a lot of complexities of putting together a set of artifacts in a convenient bundle, but is fairly limited and opaque when it comes to handling errors, timeouts, dealing with data persistance etc during a deploy. In that case it really is only a vehicle for applying a chart. This means we are limited by Helm AND by the respective chart maintainers in our artifacts.
+There are some tricky aspects of the deploy, we rely on the `helm provider` in Terraform and Helm in general to deploy to Kube. Helm itself is a good tool and handles a lot of complexities of putting together a set of artifacts in a convenient bundle, but is fairly limited and opaque when it comes to handling errors, timeouts, dealing with data persistance etc during a deploy. In that case it really is only a vehicle for applying a chart. This means we are limited by Helm AND by the respective chart maintainers for our artifacts.
 
 As an example, if the chart being applied isn't useing StatefulSets and includes PersistentVolumeClaims your PVC will be deleted when the chart is cleaned up. In a lot of ways it may be better to create a separate PVC under a StatefulSet in addition to the existing Deployment based chart and see if the chart supports passing a reference to that claim, versus relying on them to do the correct thing for your usecase. 
 
@@ -261,5 +259,24 @@ If all is good you will eventually see a success message from Terraform with a l
 
 In the event of an issue the default timeout is 5 minutes and you can safely clean up releases in Helm without impacting Torb.
 
+#### Watcher
 
+Torb supports quick iteration with our filesystem watcher. Our watcher aggregates change events to files based on configured paths, and on a set interval, also configurable in your stack.yaml, will redeploy the services and projects if changes are found. Watcher configuration at the top level in the stack.yaml looks like:
 
+```
+watcher:
+  paths:
+    - "./emojee"
+  interval: 8000
+  patch: true
+```
+
+Paths are provided as a list and watched recursively, interval is in miliseconds and patch when true will change the imagePullPolicy to Always for all projects and services in your stack.yaml. All build files and general output like IaC files are kept separate from your main buildstate. However, Terraform's buildstate *is* copied between environments and the change to image pull policies is also reflected back in your main terraform buildstate. Doing all of this ensures when you go to build and deploy your stack normally any changes are properly reverted for the cluster you're using. 
+
+You can run the watcher with
+
+    torb stack watch stack.yaml
+
+**Note: If your image registry is a separate locally hosted service like the one found in our quickstart stack you will need to pass `--local-hosted-registry`
+
+The watcher will initialize it's environment and redeploy any services with changes if patch is true. This may take a few moments as resource states are reconciled.
