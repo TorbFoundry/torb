@@ -277,6 +277,6 @@ You can run the watcher with
 
     torb stack watch stack.yaml
 
-**Note: If your image registry is a separate locally hosted service like the one found in our quickstart stack you will need to pass `--local-hosted-registry`
+**Note: If your image registry is a separate locally hosted service like the one found in our quickstart stack you will need to pass `--local-hosted-registry`**
 
 The watcher will initialize it's environment and redeploy any services with changes if patch is true. This may take a few moments as resource states are reconciled.
