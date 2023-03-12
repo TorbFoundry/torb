@@ -13,6 +13,7 @@ use crate::composer::InputAddress;
 use crate::resolver::inputs::{InputResolver, NO_INITS_FN};
 use crate::resolver::{resolve_stack, NodeDependencies, StackGraph};
 use crate::utils::{buildstate_path_or_create, checksum, kebab_to_snake_case};
+use crate::watcher::{WatcherConfig};
 
 use data_encoding::BASE32;
 use indexmap::{IndexMap, IndexSet};
@@ -599,7 +600,9 @@ impl Serialize for TorbInputSpec {
 }
 
 impl ArtifactNodeRepr {
-    pub fn display_name(&self) -> String {
+    pub fn display_name(&self, kebab_opt: Option<bool>) -> String {
+        let kebab = kebab_opt.unwrap_or(false);
+
         let name = self.mapped_inputs.get("name").map(|(_, input)| {
             if let crate::artifacts::TorbInput::String(val) = input.clone() {
                 val
@@ -609,7 +612,11 @@ impl ArtifactNodeRepr {
             }
         }).or(Some(self.name.clone())).unwrap();
 
-        kebab_to_snake_case(&name)
+        if kebab {
+            name.clone()
+        } else {
+            kebab_to_snake_case(&name)
+        }
     }
 
     #[allow(dead_code)]
@@ -815,6 +822,7 @@ pub struct ArtifactRepr {
     pub namespace: Option<String>,
     pub release: Option<String>,
     pub repositories: Option<Vec<String>>,
+    pub watcher: WatcherConfig
 }
 
 impl ArtifactRepr {
@@ -828,6 +836,7 @@ impl ArtifactRepr {
         namespace: Option<String>,
         release: Option<String>,
         repositories: Option<Vec<String>>,
+        watcher: WatcherConfig,
     ) -> ArtifactRepr {
         ArtifactRepr {
             torb_version,
@@ -841,6 +850,7 @@ impl ArtifactRepr {
             namespace: namespace,
             release: release,
             repositories,
+            watcher: watcher
         }
     }
 
@@ -909,6 +919,7 @@ fn walk_graph(graph: &StackGraph) -> Result<ArtifactRepr, Box<dyn std::error::Er
         graph.namespace.clone(),
         graph.release.clone(),
         graph.repositories.clone(),
+        graph.watcher.clone()
     );
 
     let mut node_map: IndexMap<String, ArtifactNodeRepr> = IndexMap::new();
@@ -1038,13 +1049,19 @@ pub fn get_build_file_info(
     Ok((hash_base32, filename, string_rep))
 }
 
-pub fn write_build_file(stack_yaml: String) -> (String, String, ArtifactRepr) {
+pub fn write_build_file(stack_yaml: String, location: Option<&std::path::PathBuf>) -> (String, String, ArtifactRepr) {
     let artifact = deserialize_stack_yaml_into_artifact(&stack_yaml).unwrap();
     let current_dir = std::env::current_dir().unwrap();
     let current_dir_state_dir = current_dir.join(".torb_buildstate");
     let outfile_dir_path = current_dir_state_dir.join("buildfiles");
+
     let (hash_base32, filename, artifact_as_string) = get_build_file_info(&artifact).unwrap();
-    let outfile_path = outfile_dir_path.join(&filename);
+    let outfile_path = match location {
+        Some(loc) => {
+            loc.join(&filename)
+        },
+        None => outfile_dir_path.join(&filename)
+    };
 
     if !outfile_dir_path.is_dir() {
         fs::create_dir(&outfile_dir_path).expect("Failed to create buildfile directory.");

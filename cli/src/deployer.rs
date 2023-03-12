@@ -24,11 +24,13 @@ pub enum TorbDeployerErrors {
 }
 
 pub struct StackDeployer {
+    watcher_patch: bool
 }
 
 impl StackDeployer {
-    pub fn new() -> StackDeployer {
+    pub fn new(watcher_patch: bool) -> StackDeployer {
         StackDeployer {
+            watcher_patch
         }
     }
 
@@ -43,11 +45,6 @@ impl StackDeployer {
         println!("{}", std::str::from_utf8(&out.stdout).unwrap());
         println!("{}", std::str::from_utf8(&out.stderr).unwrap());
 
-        // if artifact.meta.as_ref().is_some() {
-        //     println!("Deploying meta...");
-        //     self.deploy_meta(&artifact.meta, dryrun)?;
-        // }
-
         let out = self.deploy_tf(dryrun).expect("Failed to plan and deploy terraform.");
         println!("{}", std::str::from_utf8(&out.stdout).unwrap());
         println!("{}", std::str::from_utf8(&out.stderr).unwrap());
@@ -58,8 +55,7 @@ impl StackDeployer {
     fn init_tf(&self) -> Result<std::process::Output, Box<dyn std::error::Error>> {
         println!("Initalizing terraform...");
         let torb_path = torb_path();
-        let buildstate_path = buildstate_path_or_create();
-        let iac_env_path = buildstate_path.join("iac_environment");
+        let iac_env_path = self.iac_environment_path();
         let mut cmd = Command::new("./terraform");
         cmd.arg(format!("-chdir={}", iac_env_path.to_str().unwrap()));
         cmd.arg("init");
@@ -70,19 +66,37 @@ impl StackDeployer {
         Ok(cmd.output()?)
     }
 
+    fn iac_environment_path(&self) -> std::path::PathBuf {
+        let buildstate_path = buildstate_path_or_create();
+        if self.watcher_patch {
+            buildstate_path.join("watcher_iac_environment")
+        } else {
+            buildstate_path.join("iac_environment")
+        }
+    }
+
     fn deploy_tf(
         &self,
         dryrun: bool,
     ) -> Result<std::process::Output, Box<dyn std::error::Error>> {
         let torb_path = torb_path();
-        let buildstate_path = buildstate_path_or_create();
-        let iac_env_path = buildstate_path.join("iac_environment");
+        let iac_env_path = self.iac_environment_path();
+
+        if self.watcher_patch {
+            let buildstate_path = buildstate_path_or_create();
+            let non_watcher_iac = buildstate_path.join("iac_environment");
+            let tf_state_path = non_watcher_iac.join("terraform.tfstate");
+
+            if tf_state_path.exists() {
+                let new_path = iac_env_path.join("terraform.tfstate");
+                std::fs::copy(tf_state_path, new_path).expect("Failed to copy supporting build file.");
+            };
+        };
 
         let mut cmd = Command::new("./terraform");
         cmd.arg(format!("-chdir={}", iac_env_path.to_str().unwrap()))
             .arg("plan")
             .arg("-out=./tfplan");
-            // .arg("-detailed-exitcode");
 
         cmd.current_dir(&torb_path);
 
@@ -92,9 +106,6 @@ impl StackDeployer {
 
         if !out.status.success() {
             let err_resp = std::str::from_utf8(&out.stderr).unwrap();
-            println!("{}", std::str::from_utf8(&out.stderr).unwrap());
-            println!("{}", std::str::from_utf8(&out.stderr).unwrap());
-            println!("{}", std::str::from_utf8(&out.stderr).unwrap());
             let err = TorbDeployerErrors::FailedToPlan {
                 command: cmd,
                 response: err_resp.to_string(),

@@ -13,6 +13,8 @@ pub mod inputs;
 
 use crate::artifacts::{ArtifactNodeRepr, BuildStep, TorbInput};
 use crate::utils::{for_each_artifact_repository, normalize_name, torb_path};
+use crate::watcher::{WatcherConfig};
+
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use serde_yaml::{self, Value};
@@ -107,6 +109,7 @@ pub struct StackGraph {
     pub namespace: Option<String>,
     pub release: Option<String>,
     pub repositories: Option<Vec<String>>,
+    pub watcher: WatcherConfig
 }
 
 impl StackGraph {
@@ -121,6 +124,7 @@ impl StackGraph {
         namespace: Option<String>,
         release: Option<String>,
         repositories: Option<Vec<String>>,
+        watcher: WatcherConfig
     ) -> StackGraph {
         StackGraph {
             services: HashMap::<String, ArtifactNodeRepr>::new(),
@@ -137,6 +141,7 @@ impl StackGraph {
             namespace,
             release,
             repositories,
+            watcher: watcher
         }
     }
 
@@ -264,6 +269,12 @@ impl Resolver {
         let repositories: Option<Vec<String>> =
             serde_yaml::from_value(yaml["repositories"].clone())?;
 
+
+        let watcher: WatcherConfig = match yaml["watcher"] {
+            Value::Null => WatcherConfig::default(),
+            _ => serde_yaml::from_value(yaml["watcher"].clone())?
+        };
+
         let mut graph = StackGraph::new(
             name,
             kind,
@@ -275,6 +286,7 @@ impl Resolver {
             namespace,
             release,
             repositories,
+            watcher
         );
 
         self.walk_yaml(&mut graph, &yaml);

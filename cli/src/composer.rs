@@ -15,6 +15,7 @@ use crate::utils::{buildstate_path_or_create, for_each_artifact_repository, torb
 
 use hcl::{Block, Body, Expression, Object, ObjectKey, RawExpression, Number};
 use serde::{Deserialize, Serialize};
+use serde_yaml::{Mapping, Value};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
@@ -173,10 +174,11 @@ pub struct Composer<'a> {
     release_name: String,
     main_struct: hcl::BodyBuilder,
     artifact_repr: &'a ArtifactRepr,
+    watcher_patch: bool
 }
 
 impl<'a> Composer<'a> {
-    pub fn new(hash: String, artifact_repr: &ArtifactRepr) -> Composer {
+    pub fn new(hash: String, artifact_repr: &ArtifactRepr, watcher_patch: bool) -> Composer {
         Composer {
             hash: hash,
             build_files_seen: IndexSet::new(),
@@ -184,6 +186,7 @@ impl<'a> Composer<'a> {
             release_name: artifact_repr.release(),
             main_struct: Body::builder(),
             artifact_repr: artifact_repr,
+            watcher_patch: watcher_patch
         }
     }
 
@@ -224,7 +227,7 @@ impl<'a> Composer<'a> {
 
         match torb_input_address.property_specifier.as_str() {
             "host" => {
-                let name = format!("{}-{}", self.release_name, output_node.display_name());
+                let name = format!("{}-{}", self.release_name, output_node.display_name(None));
 
                 let namespace = self.artifact_repr.namespace(output_node);
 
@@ -251,7 +254,7 @@ impl<'a> Composer<'a> {
         };
 
         let formatted_name = kebab_to_snake_case(&self.release_name);
-        let block_name = format!("{}_{}", formatted_name, &output_node.display_name());
+        let block_name = format!("{}_{}", formatted_name, &output_node.display_name(None));
 
         format!(
             "jsondecode(data.torb_helm_release.{}.values)[\"{}\"]",
@@ -259,10 +262,18 @@ impl<'a> Composer<'a> {
         )
     }
 
+    fn iac_environment_path(&self) -> std::path::PathBuf {
+        let buildstate_path = buildstate_path_or_create();
+        if self.watcher_patch {
+            buildstate_path.join("watcher_iac_environment")
+        } else {
+            buildstate_path.join("iac_environment")
+        }
+    }
+
     pub fn compose(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         println!("Composing build environment...");
-        let buildstate_path = buildstate_path_or_create();
-        let environment_path = buildstate_path.join("iac_environment");
+        let environment_path = self.iac_environment_path();
 
         if !environment_path.exists() {
             std::fs::create_dir(environment_path)?;
@@ -287,9 +298,7 @@ impl<'a> Composer<'a> {
         for_each_artifact_repository(Box::new(|repos_path, repo| {
             let repo_path = repos_path.join(repo.file_name());
             let source_path = repo_path.join("common");
-            let buildstate_path = buildstate_path_or_create();
-
-            let new_environment_path = buildstate_path.join("iac_environment");
+            let new_environment_path = self.iac_environment_path();
 
             let repo_name = repo.file_name().into_string().unwrap();
             let namespace_dir = kebab_to_snake_case(&repo_name);
@@ -327,7 +336,7 @@ impl<'a> Composer<'a> {
             } else {
                 let path = entry.path();
                 let new_path = dest.join(path.file_name().unwrap());
-                println!("Copying {} to {}", path.display(), new_path.display());
+
                 fs::copy(path, new_path).expect("Failed to copy supporting build file.");
             }
         }
@@ -335,8 +344,8 @@ impl<'a> Composer<'a> {
 
     fn write_main_buildfile(&mut self) -> Result<std::path::PathBuf, Box<dyn std::error::Error>> {
         let builder = std::mem::take(&mut self.main_struct);
-        let buildstate_path = buildstate_path_or_create();
-        let environment_path = buildstate_path.join("iac_environment");
+        let environment_path = self.iac_environment_path();
+
         let main_tf_path = environment_path.join("main.tf");
 
         let built_content = builder.build();
@@ -360,9 +369,9 @@ impl<'a> Composer<'a> {
             self.walk_artifact(child)?
         }
 
-        if !self.build_files_seen.contains(&node.name) {
+        if !self.build_files_seen.contains(&node.display_name(None)) {
             self.copy_build_files_for_node(&node).and_then(|_out| {
-                if self.build_files_seen.insert(node.name.clone()) {
+                if self.build_files_seen.insert(node.display_name(None).clone()) {
                     Ok(())
                 } else {
                     Err(Box::new(std::io::Error::new(
@@ -402,10 +411,10 @@ impl<'a> Composer<'a> {
 
         let data_block = Block::builder("data")
             .add_label("torb_helm_release")
-            .add_label(format!("{}_{}", &snake_case_release_name, &node.display_name()))
+            .add_label(format!("{}_{}", &snake_case_release_name, &node.display_name(None)))
             .add_attribute((
                 "release_name",
-                format!("{}-{}", self.release_name.clone(), snake_case_to_kebab(&node.name)),
+                format!("{}-{}", self.release_name.clone(), snake_case_to_kebab(&node.display_name(None))),
             ))
             .add_attribute(("namespace", namespace))
             .add_attribute((
@@ -421,8 +430,7 @@ impl<'a> Composer<'a> {
         &mut self,
         node: &ArtifactNodeRepr,
     ) -> Result<bool, Box<dyn std::error::Error>> {
-        let buildstate_path = buildstate_path_or_create();
-        let environment_path = buildstate_path.join("iac_environment");
+        let environment_path = self.iac_environment_path();
         let node_source = node.source.clone().unwrap();
         let namespace_dir = kebab_to_snake_case(&node_source);
         let repo_path = environment_path.join(namespace_dir);
@@ -435,7 +443,7 @@ impl<'a> Composer<'a> {
             fs::create_dir(&repo_path).expect(&error);
         }
 
-        let env_node_path = repo_path.join(format!("{}_module", &node.display_name()));
+        let env_node_path = repo_path.join(format!("{}_module", &node.display_name(None)));
 
         if !env_node_path.exists() {
             let error = format!(
@@ -586,7 +594,7 @@ impl<'a> Composer<'a> {
         let node_source = node.source.clone().unwrap();
         let namespace_dir = kebab_to_snake_case(&node_source);
 
-        let source = format!("./{namespace_dir}/{}_module", node.display_name());
+        let source = format!("./{namespace_dir}/{}_module", node.display_name(None));
         let name = node.fqn.clone().replace(".", "_");
 
         let namespace = self.artifact_repr.namespace(node);
@@ -596,7 +604,7 @@ impl<'a> Composer<'a> {
             ("source", source),
             (
                 "release_name",
-                format!("{}-{}", self.release_name.clone(), snake_case_to_kebab(&node.name)),
+                format!("{}-{}", self.release_name.clone(), snake_case_to_kebab(&node.display_name(None))),
             ),
             ("namespace", namespace),
         ];
@@ -613,9 +621,10 @@ impl<'a> Composer<'a> {
             }
 
             if build_step.registry != "local" {
-                image_key_map.insert("repository".to_string(), build_step.registry);
+                let registry = format!("{}/{}", build_step.registry, node.display_name(None));
+                image_key_map.insert("repository".to_string(), registry);
             } else {
-                image_key_map.insert("repository".to_string(), node.display_name().clone());
+                image_key_map.insert("repository".to_string(), node.display_name(None).clone());
             }
 
             map.insert("image".to_string(), image_key_map);
@@ -674,6 +683,18 @@ impl<'a> Composer<'a> {
 
         if mapped_values.clone().unwrap() != "---\n~\n" {
             values.push(mapped_values.expect("Unable to resolve values field."));
+        }
+
+        if self.watcher_patch {
+            let mut image_pull_policy_map = Mapping::new();
+            let mut nested_image_pull_policy_map = Mapping::new();
+            nested_image_pull_policy_map.insert(Value::String("pullPolicy".into()), Value::String("Always".into()));
+            image_pull_policy_map.insert(Value::String("image".into()), Value::Mapping(nested_image_pull_policy_map));
+
+            let patch_value = Value::Mapping(image_pull_policy_map);
+            let patch_yaml = serde_yaml::to_string(&patch_value)?;
+
+            values.push(patch_yaml);
         }
 
         let mut builder = std::mem::take(&mut self.main_struct);
