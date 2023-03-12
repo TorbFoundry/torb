@@ -165,7 +165,7 @@ impl Watcher {
         let mut composer = Composer::new(self.build_hash.clone(), &self.artifact, self.patch.clone());
         composer.compose().unwrap();
 
-        let mut deployer = StackDeployer::new(true);
+        let mut deployer = StackDeployer::new(self.patch.clone());
 
         deployer.deploy(&self.artifact, false).expect("Unable to deploy watcher stack.");
 
