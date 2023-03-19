@@ -1,6 +1,6 @@
 // Business Source License 1.1
 // Licensor:  Torb Foundry
-// Licensed Work:  Torb v0.3.5-03.13
+// Licensed Work:  Torb v0.3.6-03.19
 // The Licensed Work is © 2023-Present Torb Foundry
 //
 // Change License: GNU Affero General Public License Version 3
@@ -8,6 +8,7 @@
 // Change Date: Feb 22, 2023
 //
 // See LICENSE file at https://github.com/TorbFoundry/torb/blob/main/LICENSE for details.
+
 use colored::Colorize;
 
 use core::fmt::Display;
