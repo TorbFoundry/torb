@@ -9,77 +9,73 @@
 //
 // See LICENSE file at https://github.com/TorbFoundry/torb/blob/main/LICENSE for details.
 
-use image::imageops::resize;
 use core::fmt::Display;
-use std::{
-    fmt::Debug
-};
+use image::imageops::resize;
+use std::fmt::Debug;
 
+use crossterm::{cursor, terminal, ExecutableCommand, QueueableCommand};
+use drawille::{Canvas, PixelColor};
+use image::codecs::gif::GifDecoder;
+use image::{AnimationDecoder, ImageDecoder};
+use std::io::{stdout, Write};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
-use std::io::{ Write, stdout};
-use drawille::{Canvas, PixelColor};
-use image::codecs::gif::{GifDecoder};
-use image::{ImageDecoder, AnimationDecoder};
 use std::{thread, time};
-use crossterm::{QueueableCommand, cursor, ExecutableCommand };
 
-const FRAME_HEIGHT: u16 = 27;
+use crate::utils::{PrettyContext, PrettyExit};
 
-pub struct BuilderAnimation {
-}
+const FRAME_HEIGHT: u16 = 16;
+
+pub struct BuilderAnimation {}
 
 pub trait Animation<T, E> {
     fn do_with_animation(&self, f: Box<dyn FnMut() -> Result<T, E>>) -> Result<T, E>
-        where E: Debug + Display;
+    where
+        E: Debug + Display;
+
+    fn start_animation(
+        &self,
+        animation: std::fs::File,
+        kill_flag: Arc<AtomicBool>,
+    ) -> std::thread::JoinHandle<()>;
 }
 
 impl BuilderAnimation {
     pub fn new() -> Self {
-        BuilderAnimation {
-        }
+        BuilderAnimation {}
     }
 }
 impl<T, E> Animation<T, E> for BuilderAnimation
-    where 
+where
     E: Debug + Display,
 {
-    fn do_with_animation(&self, mut f: Box<dyn FnMut() -> Result<T, E>>) -> Result<T, E>
-        where E: Debug + Display
-    {
-        let home_dir = dirs::home_dir().unwrap();
-        let torb_path = home_dir.join(".torb");
-        let repository_path = torb_path.join("repositories");
-        let repo = "torb-artifacts";
-        let gif_path = "torb_dwarf_animation.gif";
-
-        let artifacts_path = repository_path.join(repo);
-        let animation_path = artifacts_path.join(gif_path);
-
-        let animation = std::fs::File::open(animation_path).unwrap();
-
+    fn start_animation(
+        &self,
+        animation: std::fs::File,
+        kill_flag: Arc<AtomicBool>,
+    ) -> std::thread::JoinHandle<()> {
         let decoder = GifDecoder::new(animation).unwrap();
 
         let (mut width, mut height) = decoder.dimensions();
 
-        let scale = 0.5;
+        let scale = 0.3;
 
         width = f32::floor(width as f32 * scale) as u32;
         height = f32::floor(height as f32 * scale) as u32;
 
         let mut canvas = Canvas::new(width, height);
         let frames = decoder.into_frames();
-        let frames = frames.collect_frames().expect("error decoding gif");
-        let mut new_stdout = stdout();
+        let frames_opt = frames.collect_frames().use_or_pretty_warn(
+            PrettyContext::default()
+                .warn("Warning! Unable to decode frames for animation GIF.")
+                .pretty(),
+        );
 
-        let kill_flag = Arc::new(AtomicBool::new(false));
         let kill_flag_clone = kill_flag.clone();
 
-        new_stdout.execute(cursor::Hide).unwrap();
-
-        let animation_thread_handle = thread::spawn(move || {
+        thread::spawn(move || {
             let mut thread_stdout = stdout();
 
             loop {
@@ -91,6 +87,7 @@ impl<T, E> Animation<T, E> for BuilderAnimation
                     break;
                 };
 
+                let frames = frames_opt.clone().unwrap_or(vec![]);
 
                 for frame in frames.iter().cloned() {
                     let mut img = frame.into_buffer();
@@ -98,9 +95,13 @@ impl<T, E> Animation<T, E> for BuilderAnimation
                     for x in 0..width {
                         for y in 0..height {
                             let pixel = img.get_pixel(x, y);
-                            let color = PixelColor::TrueColor { r: pixel[0], g: pixel[1], b: pixel[2] };
+                            let color = PixelColor::TrueColor {
+                                r: pixel[0],
+                                g: pixel[1],
+                                b: pixel[2],
+                            };
                             canvas.set_colored(x, y, color);
-                       }
+                        }
                     }
 
                     let frame = canvas.frame();
@@ -112,17 +113,66 @@ impl<T, E> Animation<T, E> for BuilderAnimation
 
                     // Move up the height of the frame in the terminal
                     thread_stdout.queue(cursor::MoveUp(FRAME_HEIGHT)).unwrap();
-                };
-            };
-        });
+                }
+            }
+        })
+    }
+
+    fn do_with_animation(&self, mut f: Box<dyn FnMut() -> Result<T, E>>) -> Result<T, E>
+    where
+        E: Debug + Display,
+    {
+        let home_dir = dirs::home_dir().unwrap();
+        let torb_path = home_dir.join(".torb");
+        let repository_path = torb_path.join("repositories");
+        let repo = "torb-artifacts";
+        let gif_path = "torb_dwarf_animation.gif";
+
+        let artifacts_path = repository_path.join(repo);
+        let animation_path = artifacts_path.join(gif_path);
+
+        let animation_opt = std::fs::File::open(animation_path).use_or_pretty_warn(
+            PrettyContext::default()
+                .warn("Warning! Unable to open animation GIF.")
+                .pretty(),
+        );
+
+        let mut new_stdout = stdout();
+        new_stdout.execute(cursor::Hide).use_or_pretty_warn_send(
+            PrettyContext::default()
+                .warn("Warning! Unable to hide cursor for animation.")
+                .pretty(),
+        );
+
+        let kill_flag = Arc::new(AtomicBool::new(false));
+        let animation_thread_handle_opt = if animation_opt.is_some() {
+            let animation = animation_opt.unwrap();
+
+            Some(<BuilderAnimation as Animation<T, E>>::start_animation(
+                self,
+                animation,
+                kill_flag.clone(),
+            ))
+        } else {
+            None
+        };
 
         let res = f();
         kill_flag.store(true, Ordering::SeqCst);
 
-        animation_thread_handle.join().unwrap();
+        if animation_thread_handle_opt.is_some() {
+            let handle = animation_thread_handle_opt.unwrap();
+            handle.join().use_or_pretty_warn_send(
+                PrettyContext::default()
+                    .warn("Warning! Animation thread in an errored state when joining.")
+                    .pretty(),
+            );
+        };
+
         new_stdout.execute(cursor::Show).unwrap();
+        new_stdout
+            .execute(terminal::Clear(terminal::ClearType::FromCursorDown))
+            .unwrap();
         res
     }
 }
-
-

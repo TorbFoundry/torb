@@ -280,6 +280,7 @@ pub fn get_resource_kind(
 pub struct PrettyContext<'a> {
     success_marquee_msg: Option<&'a str>,
     error_marquee_msg: Option<&'a str>,
+    warning: Option<&'a str>,
     error_context: &'a str,
     suggestions: Vec<&'a str>,
 }
@@ -289,6 +290,7 @@ impl<'a> Default for PrettyContext<'a> {
         PrettyContext {
             success_marquee_msg: None,
             error_marquee_msg: None,
+            warning: None,
             error_context: "",
             suggestions: Vec::new(),
         }
@@ -317,6 +319,12 @@ impl<'a> PrettyContext<'a> {
         self
     }
 
+    pub fn warn(&mut self, msg: &'a str) -> &mut Self {
+        self.warning = Some(msg);
+
+        self
+    }
+
     pub fn pretty(&mut self) -> Self {
         self.clone()
     }
@@ -327,12 +335,20 @@ pub trait PrettyExit<T, E> {
     where
         E: Debug + Display;
 
-
     fn use_or_pretty_error(self, exit: bool, context: PrettyContext) -> Option<T>
     where
         E: Debug + Display;
 
+    fn use_or_pretty_warn_send(self, context: PrettyContext) -> Option<T>
+    where
+        E: Send + Debug;
+
+    fn use_or_pretty_warn(self, context: PrettyContext) -> Option<T>
+    where
+        E: Debug + Display;
+
     fn display_success(&self, context: &PrettyContext);
+    fn display_warning(&self, context: &PrettyContext);
     fn display_error(&self, context: &PrettyContext);
     fn display_context(&self, context: &PrettyContext);
     fn display_suggestions(&self, context: &PrettyContext);
@@ -340,6 +356,48 @@ pub trait PrettyExit<T, E> {
 }
 
 impl<T, E> PrettyExit<T, E> for Result<T, E> {
+    fn use_or_pretty_warn_send(self, context: PrettyContext) -> Option<T>
+    where
+        E: Send + Debug,
+    {
+        match self.as_ref().err() {
+            Some(err) => {
+                self.display_warning(&context);
+                let err_msg = format!("{:?}", err);
+                println!("{}", err_msg.yellow());
+                self.display_context(&context);
+                self.display_suggestions(&context);
+                self.display_error_call_to_action(&context);
+                None
+            }
+            None => {
+                self.display_success(&context);
+                Some(self.unwrap())
+            }
+        }
+    }
+
+    fn use_or_pretty_warn(self, context: PrettyContext) -> Option<T>
+    where
+        E: Debug + Display,
+    {
+        match self.as_ref().err() {
+            Some(err) => {
+                self.display_warning(&context);
+                let err_msg = format!("{}", err);
+                println!("{}", err_msg.yellow());
+                self.display_context(&context);
+                self.display_suggestions(&context);
+                self.display_error_call_to_action(&context);
+                None
+            }
+            None => {
+                self.display_success(&context);
+                Some(self.unwrap())
+            }
+        }
+    }
+
     fn use_or_pretty_exit(self, context: PrettyContext) -> T
     where
         E: Debug + Display,
@@ -383,6 +441,10 @@ impl<T, E> PrettyExit<T, E> for Result<T, E> {
         if context.error_marquee_msg.is_some() {
             println!("{}\n", context.error_marquee_msg.unwrap().bold().red());
         }
+    }
+
+    fn display_warning(&self, context: &PrettyContext) {
+        println!("{}\n", context.warning.unwrap().bold().yellow());
     }
 
     fn display_context(&self, context: &PrettyContext) {
