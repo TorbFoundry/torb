@@ -78,8 +78,6 @@ impl<'a> StackInitializer<'a> {
         Ok(())
     }
 
-
-
     fn walk_artifact(
         &mut self,
         node: &ArtifactNodeRepr,

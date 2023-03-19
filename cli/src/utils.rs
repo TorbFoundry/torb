@@ -8,11 +8,14 @@
 // Change Date: Feb 22, 2023
 //
 // See LICENSE file at https://github.com/TorbFoundry/torb/blob/main/LICENSE for details.
+use colored::Colorize;
 
+use core::fmt::Display;
 use data_encoding::BASE32;
 use sha2::{Digest, Sha256};
 use std::error::Error;
 use std::{
+    fmt::Debug,
     fs::DirEntry,
     process::{Command, Output},
 };
@@ -20,14 +23,16 @@ use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum TorbUtilityErrors {
-    #[error("Unable to run this command: {command:?}, in shell: {shell:?}, because of this reason: {reason:?}")]
+    #[error(
+        "Unable to run this command:\n\n{command}, \n\nShell: {shell}, \n\nReason:\n\n{reason}"
+    )]
     UnableToRunCommandInShell {
         command: String,
         shell: String,
         reason: String,
     },
 
-    #[error("Unable to run this command: {command:?}, because of this reason: {reason:?}")]
+    #[error("Unable to run this command:\n\n{command}, \n\nbecause of this reason: \n\n{reason}")]
     UnableToRunCommand { command: String, reason: String },
 
     #[error(
@@ -108,7 +113,7 @@ pub fn run_command_in_user_shell(
 
     let output = command.output()?;
 
-    if output.status.success() {
+    if output.status.success() && output.stderr.is_empty() {
         Ok(output)
     } else {
         Err(Box::new(TorbUtilityErrors::UnableToRunCommandInShell {
@@ -269,4 +274,130 @@ pub fn get_resource_kind(
     }
 
     res
+}
+
+#[derive(Clone)]
+pub struct PrettyContext<'a> {
+    success_marquee_msg: Option<&'a str>,
+    error_marquee_msg: Option<&'a str>,
+    error_context: &'a str,
+    suggestions: Vec<&'a str>,
+}
+
+impl<'a> Default for PrettyContext<'a> {
+    fn default() -> PrettyContext<'a> {
+        PrettyContext {
+            success_marquee_msg: None,
+            error_marquee_msg: None,
+            error_context: "",
+            suggestions: Vec::new(),
+        }
+    }
+}
+
+impl<'a> PrettyContext<'a> {
+    pub fn success(&mut self, msg: &'a str) -> &mut Self {
+        self.success_marquee_msg = Some(msg);
+
+        self
+    }
+    pub fn error(&mut self, msg: &'a str) -> &mut Self {
+        self.error_marquee_msg = Some(msg);
+
+        self
+    }
+    pub fn context(&mut self, msg: &'a str) -> &mut Self {
+        self.error_context = msg;
+
+        self
+    }
+    pub fn suggestions(&mut self, msgs: Vec<&'a str>) -> &mut Self {
+        self.suggestions = msgs;
+
+        self
+    }
+
+    pub fn pretty(&mut self) -> Self {
+        self.clone()
+    }
+}
+
+pub trait PrettyExit<T, E> {
+    fn use_or_pretty_exit(self, context: PrettyContext) -> T
+    where
+        E: Debug + Display;
+
+
+    fn use_or_pretty_error(self, exit: bool, context: PrettyContext) -> Option<T>
+    where
+        E: Debug + Display;
+
+    fn display_success(&self, context: &PrettyContext);
+    fn display_error(&self, context: &PrettyContext);
+    fn display_context(&self, context: &PrettyContext);
+    fn display_suggestions(&self, context: &PrettyContext);
+    fn display_error_call_to_action(&self, context: &PrettyContext);
+}
+
+impl<T, E> PrettyExit<T, E> for Result<T, E> {
+    fn use_or_pretty_exit(self, context: PrettyContext) -> T
+    where
+        E: Debug + Display,
+    {
+        self.use_or_pretty_error(true, context).unwrap()
+    }
+
+    fn use_or_pretty_error(self, exit: bool, context: PrettyContext) -> Option<T>
+    where
+        E: Debug + Display,
+    {
+        match self.as_ref().err() {
+            Some(err) => {
+                self.display_error(&context);
+                let err_msg = format!("{}", err);
+                println!("{}", err_msg.red());
+                self.display_context(&context);
+                self.display_suggestions(&context);
+                self.display_error_call_to_action(&context);
+
+                if exit {
+                    std::process::exit(1);
+                } else {
+                    None
+                }
+            }
+            None => {
+                self.display_success(&context);
+                Some(self.unwrap())
+            }
+        }
+    }
+
+    fn display_success(&self, context: &PrettyContext) {
+        if context.success_marquee_msg.is_some() {
+            println!("{}\n", context.success_marquee_msg.unwrap().bold().green());
+        };
+    }
+
+    fn display_error(&self, context: &PrettyContext) {
+        if context.error_marquee_msg.is_some() {
+            println!("{}\n", context.error_marquee_msg.unwrap().bold().red());
+        }
+    }
+
+    fn display_context(&self, context: &PrettyContext) {
+        println!("{}\n", context.error_context.bold().yellow());
+    }
+
+    fn display_suggestions(&self, context: &PrettyContext) {
+        println!("{}", "What can you do?".bold().yellow());
+        for suggestion in context.suggestions.iter() {
+            println!("- {}", suggestion.bold().yellow());
+        }
+    }
+
+    fn display_error_call_to_action(&self, _context: &PrettyContext) {
+        println!("\n{}", "After trying our suggestions, If this looks like something that should be reported to the maintainers\n\nYou can do so here:".bold());
+        println!("\n https://github.com/TorbFoundry/torb/issues/new \n");
+    }
 }

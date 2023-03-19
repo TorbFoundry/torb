@@ -18,9 +18,9 @@ use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum TorbBuilderErrors {
-    #[error("Unable to build from dockerfile, reason: {response:?}")]
+    #[error("Unable to build from dockerfile, reason: {response}")]
     UnableToBuildDockerfile { response: String },
-    #[error("Unable to build from build script, reason: {response:?}")]
+    #[error("Unable to build from build script, reason: {response}")]
     UnableToBuildBuildScript { response: String },
     #[error("Either dockerfile or script_path must be provided.")]
     MustDefineDockerfileOrBuildScript,

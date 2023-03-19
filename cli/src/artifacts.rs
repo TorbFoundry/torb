@@ -809,7 +809,7 @@ impl ArtifactNodeRepr {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct ArtifactRepr {
     pub torb_version: String,
     pub helm_version: String,

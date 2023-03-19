@@ -20,6 +20,7 @@ mod resolver;
 mod utils;
 mod vcs;
 mod watcher;
+mod animation;
 
 use indexmap::IndexMap;
 use rayon::prelude::*;
@@ -29,7 +30,8 @@ use std::io::{self};
 use std::process::Command;
 use thiserror::Error;
 use ureq;
-use utils::{buildstate_path_or_create, torb_path};
+use utils::{buildstate_path_or_create, torb_path, PrettyExit};
+use animation::{BuilderAnimation, Animation};
 
 use crate::artifacts::{
     deserialize_stack_yaml_into_artifact, get_build_file_info, load_build_file, write_build_file,
@@ -41,9 +43,9 @@ use crate::composer::Composer;
 use crate::config::TORB_CONFIG;
 use crate::deployer::StackDeployer;
 use crate::initializer::StackInitializer;
-use crate::utils::{CommandConfig, CommandPipeline};
+use crate::utils::{CommandConfig, CommandPipeline, PrettyContext};
 use crate::vcs::{GitVersionControl, GithubVCS};
-use crate::watcher::{Watcher};
+use crate::watcher::Watcher;
 
 const VERSION: &'static str = env!("CARGO_PKG_VERSION");
 
@@ -122,14 +124,14 @@ fn init() {
             "--driver-opt",
             "network=host",
         ],
-        None
+        None,
     );
 
     let res = CommandPipeline::execute_single(buildx_cmd_conf);
 
     match res {
         Ok(_) => println!("Created docker build kit builder, torb_builder."),
-        Err(err) => panic!("{}", err)
+        Err(err) => panic!("{}", err),
     }
 
     println!("Finished!")
@@ -195,13 +197,32 @@ fn init_stack(file_path: String) {
     let mut stack_initializer = StackInitializer::new(&artifact);
 
     stack_initializer
-        .run_node_init_steps()
-        .expect("Failed to initialize stack.");
+        .run_node_init_steps().use_or_pretty_exit(
+            PrettyContext::default()
+            .error("Oh no, we failed to initialize the stack!")
+            .context("Failures here are typically because of missing dependencies for parts of the stack you're looking to initialize.")
+            .suggestions(vec![
+                "Check that all dependencies are installed.",
+                "Check to make sure you're on a compatible operating system."
+            ])
+            .success("Success! Stack initialized!")
+            .pretty()
+        )
 }
 
 fn compose_build_environment(build_hash: String, build_artifact: &ArtifactRepr) {
     let mut composer = Composer::new(build_hash, build_artifact, false);
-    composer.compose().unwrap();
+    composer.compose().use_or_pretty_exit(
+        PrettyContext::default()
+        .error("Oh no, we failed to generate the IaC build environment!")
+        .success("Success! IaC build environment generated!")
+        .context("This typically happens due to failures parsing the stack into HCL for Terraform.")
+        .suggestions(vec![
+            "Check that your inputs are escaped correctly.",
+            "Check that Torb has been initialized correctly, at ~/.torb you should see a Terraform binary appropriate to your system."
+        ])
+        .pretty()
+    );
 }
 
 fn run_dependency_build_steps(
@@ -209,9 +230,14 @@ fn run_dependency_build_steps(
     build_artifact: &ArtifactRepr,
     build_platform_string: String,
     dryrun: bool,
-    separate_local_registry: bool
+    separate_local_registry: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let mut builder = StackBuilder::new(build_artifact, build_platform_string, dryrun, separate_local_registry);
+    let mut builder = StackBuilder::new(
+        build_artifact,
+        build_platform_string,
+        dryrun,
+        separate_local_registry,
+    );
 
     builder.build()
 }
@@ -297,14 +323,19 @@ fn update_artifacts(name: Option<&str>) {
                 .current_dir(&artifacts_path)
                 .output();
 
-            match pull_cmd_out {
-                Ok(_) => {
-                    println!("{repo_name} done refreshing!");
-                }
-                Err(_) => {
-                    panic!("{}", err_msg);
-                }
-            }
+            let success_msg = format!("{repo_name} done refreshing!");
+            pull_cmd_out.use_or_pretty_exit(
+                PrettyContext::default()
+                .error(&err_msg)
+                .context("This type of error is usually an access or connection issue.")
+                .suggestions(vec![
+                    "Check that you have the ability to access the artifact repo you're refreshing.",
+                    "Check that you have an active internet connection."
+                ])
+                .success(&success_msg)
+                .pretty()
+            );
+
         }
     })
 }
@@ -440,9 +471,7 @@ fn main() {
 
                     checkout_stack(name_option);
                 }
-                Some("new") => {
-                    new_stack()
-                }
+                Some("new") => new_stack(),
                 Some("init") => {
                     let file_path_option = subcommand
                         .subcommand_matches("init")
@@ -475,14 +504,33 @@ fn main() {
                         let (_, _, build_artifact) =
                             load_build_file(build_filename).expect("Unable to load build file.");
 
-                        run_dependency_build_steps(
-                            build_hash.clone(),
-                            &build_artifact,
-                        build_platforms_string,
-                            dryrun,
-                            local_registry
-                        )
-                        .expect("Unable to build required images/artifacts for nodes.");
+
+                        let animator = BuilderAnimation::new();
+
+                        let build_hash_clone = build_hash.clone();
+                        let build_artifact_clone = build_artifact.clone();
+
+                        animator.do_with_animation(Box::new(
+                            move || {
+                            run_dependency_build_steps(
+                                build_hash_clone.clone(),
+                                &build_artifact_clone,
+                            build_platforms_string.clone(),
+                                dryrun,
+                                local_registry
+                            )
+                            }
+                        )).use_or_pretty_exit(
+                                PrettyContext::default()
+                                .error("Oh no, we were unable to build the stack!")
+                                .success("Success! Stack has been built!")
+                                .context("Errors here are typically because of a failed docker build, syntax issue in the dockerfile or a connectivity issue with the docker registry.")
+                                .suggestions(vec![
+                                    "Check that your dockerfile has no syntax errors and is otherwise correct.",
+                                    "If you're building with an image registry that is hosted on the same machine, but as a separate service and not the default docker registry, try passing --local-hosted-registry as a flag."
+                                ])
+                                .pretty()
+                            );
 
                         compose_build_environment(build_hash.clone(), &build_artifact);
                     }
@@ -506,18 +554,25 @@ fn main() {
                         let (_, _, build_artifact) =
                             load_build_file(build_filename).expect("Unable to load build file.");
 
-                        run_deploy_steps(
-                            build_hash.clone(),
-                            &build_artifact,
-                            dryrun,
+                        run_deploy_steps(build_hash.clone(), &build_artifact, dryrun)
+                        .use_or_pretty_exit(
+                            PrettyContext::default()
+                            .error("Oh no, we were unable to deploy the stack!")
+                            .success("Success! Stack has been deployed!")
+                            .context("Errors here are typically because of failed Terraform deployments or Helm failures.")
+                            .suggestions(vec![
+                                "Check that your Terraform IaC environment was generated correctly. \nThis can be found in your project folder at, .torb_buildstate/iac_environment, or .torb_buildstate/watcher_iac_environment if you're using the watcher.",
+                                "To see if your Helm deployment failed you can do `helm ls --namespace <namespace>` where the namespace is the one you're deploying to.",
+                                "After seeing if the deployment has failed in Helm, you can use kubectl to debug further. Take a look at https://kubernetes.io/docs/reference/kubectl/cheatsheet/ if you're less familiar with kubectl."
+                            ])
+                            .pretty()
                         )
-                        .expect("Unable to deploy required images/artifacts for nodes.");
                     }
                 }
                 Some("watch") => {
                     subcommand = subcommand.subcommand_matches("watch").unwrap();
                     let file_path_option = subcommand.value_of("file");
-                    let has_local_registry= subcommand.is_present("--local-hosted-registry");
+                    let has_local_registry = subcommand.is_present("--local-hosted-registry");
                     watch(file_path_option, has_local_registry);
                 }
                 Some("list") => {

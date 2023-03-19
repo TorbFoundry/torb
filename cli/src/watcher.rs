@@ -12,28 +12,30 @@
 use crate::artifacts::{write_build_file, ArtifactRepr};
 use crate::builder::StackBuilder;
 // use crate::deployer::StackDeployer;
-use crate::utils::{CommandConfig, get_resource_kind, ResourceKind, CommandPipeline};
 use crate::composer::Composer;
 use crate::deployer::StackDeployer;
-use crate::utils::{buildstate_path_or_create};
-
-use tokio::{
-    sync::mpsc::{channel, Receiver},
-    runtime::Runtime,
-    time
+use crate::utils::buildstate_path_or_create;
+use crate::utils::{
+    get_resource_kind, CommandConfig, CommandPipeline, PrettyContext, PrettyExit, ResourceKind,
 };
-use std::{time::{Duration}, sync::PoisonError};
-use std::sync::{Arc, Mutex, MutexGuard};
 
-use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher as NotifyWatcher, Config};
-use std::path::{PathBuf};
+use std::sync::{Arc, Mutex, MutexGuard};
+use std::{sync::PoisonError, time::Duration};
+use tokio::{
+    runtime::Runtime,
+    sync::mpsc::{channel, Receiver},
+    time,
+};
+
+use notify::{Config, Event, RecommendedWatcher, RecursiveMode, Watcher as NotifyWatcher};
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct WatcherConfig {
     paths: Vec<String>,
     interval: u64,
-    patch: bool
+    patch: bool,
 }
 
 impl Default for WatcherConfig {
@@ -58,14 +60,20 @@ pub struct Watcher {
 
 struct WatcherInternal {
     pub queue: Mutex<Vec<Event>>,
-    pub separate_local_registry: bool
+    pub separate_local_registry: bool,
 }
 
 impl WatcherInternal {
     fn new(separate_local_registry: bool) -> Self {
-        WatcherInternal { queue: Mutex::new(Vec::<Event>::new()), separate_local_registry }
+        WatcherInternal {
+            queue: Mutex::new(Vec::<Event>::new()),
+            separate_local_registry,
+        }
     }
-    fn redeploy(&self, artifact: Arc<ArtifactRepr>) -> Result<(), PoisonError<MutexGuard<Vec<Event>>>> {
+    fn redeploy(
+        &self,
+        artifact: Arc<ArtifactRepr>,
+    ) -> Result<(), PoisonError<MutexGuard<Vec<Event>>>> {
         self.queue.lock().map(|mut queue| {
             if !queue.is_empty() {
                 println!("Changes found during watcher interval, redeploying!");
@@ -77,7 +85,13 @@ impl WatcherInternal {
 
                 let mut builder = StackBuilder::new(&artifact, build_platforms, false, self.separate_local_registry.clone());
 
-                builder.build().expect("Failed to build stack during watcher redeploy.");
+                builder.build().use_or_pretty_error(
+                    false,
+                    PrettyContext::default()
+                    .success("Success! Watcher rebuilt stack.")
+                    .error("Oh no! The Watcher failed to rebuild the stack. Continuing to watch, please fix your errors.")
+                    .pretty()
+                );
 
                 for (_, node) in artifact.nodes.iter() {
                     let resource_name = format!("{}-{}", artifact.release(), node.display_name(Some(true)));
@@ -128,11 +142,26 @@ impl Watcher {
         let (build_hash, build_filename, artifact) = write_build_file(contents, Some(&location));
         let watcher = artifact.watcher.clone();
 
-
-        Watcher::new(watcher.paths, artifact, Some(watcher.interval), Some(watcher.patch), local_registry, build_hash, build_filename)
+        Watcher::new(
+            watcher.paths,
+            artifact,
+            Some(watcher.interval),
+            Some(watcher.patch),
+            local_registry,
+            build_hash,
+            build_filename,
+        )
     }
 
-    fn new(paths: Vec<String>, artifact: ArtifactRepr, interval: Option<u64>, patch: Option<bool>, local_registry: bool, build_hash: String, build_filename: String) -> Self {
+    fn new(
+        paths: Vec<String>,
+        artifact: ArtifactRepr,
+        interval: Option<u64>,
+        patch: Option<bool>,
+        local_registry: bool,
+        build_hash: String,
+        build_filename: String,
+    ) -> Self {
         let interval = interval.unwrap_or(3000);
         let patch = patch.unwrap_or(true);
         let mut bufs = Vec::new();
@@ -151,24 +180,52 @@ impl Watcher {
             artifact: Arc::new(artifact),
             build_hash,
             build_filename,
-            internal
+            internal,
         }
     }
 
     fn setup_stack(&mut self) {
         let build_platforms = "".to_string();
 
-        let mut builder = StackBuilder::new(&self.artifact, build_platforms, false, self.internal.separate_local_registry.clone());
+        let mut builder = StackBuilder::new(
+            &self.artifact,
+            build_platforms,
+            false,
+            self.internal.separate_local_registry.clone(),
+        );
 
-        builder.build().expect("Failed to build stack during watcher redeploy.");
+        builder.build().use_or_pretty_exit(
+            PrettyContext::default()
+            .error("Oh no, we were unable to build the stack when starting the watcher!")
+            .success("Success! Stack has been built!")
+            .context("Errors here are typically because of a failed docker build, syntax issue in the dockerfile or a connectivity issue with the docker registry.")
+            .suggestions(vec![
+                "Check that your dockerfile has no syntax errors and is otherwise correct.",
+                "If you're building with an image registry that is hosted on the same machine, but as a separate service and not the default docker registry, try passing --local-hosted-registry as a flag."
+            ])
+            .pretty()
+        );
 
-        let mut composer = Composer::new(self.build_hash.clone(), &self.artifact, self.patch.clone());
+        let mut composer =
+            Composer::new(self.build_hash.clone(), &self.artifact, self.patch.clone());
         composer.compose().unwrap();
 
         let mut deployer = StackDeployer::new(self.patch.clone());
 
-        deployer.deploy(&self.artifact, false).expect("Unable to deploy watcher stack.");
-
+        deployer
+            .deploy(&self.artifact, false)
+            .use_or_pretty_exit(
+                PrettyContext::default()
+                .error("Oh no, we were unable to deploy the stack when starting the watcher!")
+                .success("Success! Stack has been deployed!")
+                .context("Errors here are typically because of failed Terraform deployments or Helm failures.")
+                .suggestions(vec![
+                    "Check that your Terraform IaC environment was generated correctly. \nThis can be found in your project folder at, .torb_buildstate/iac_environment, or .torb_buildstate/watcher_iac_environment if you're using the watcher.",
+                    "To see if your Helm deployment failed you can do `helm ls --namespace <namespace>` where the namespace is the one you're deploying to.",
+                    "After seeing if the deployment has failed in Helm, you can use kubectl to debug further. Take a look at https://kubernetes.io/docs/reference/kubectl/cheatsheet/ if you're less familiar with kubectl."
+                ])
+                .pretty()
+            );
 
         let buildstate_path = buildstate_path_or_create();
         let non_watcher_iac = buildstate_path.join("iac_environment");
@@ -184,7 +241,6 @@ impl Watcher {
     pub fn start(mut self) {
         self.setup_stack();
 
-
         let rt = Runtime::new().unwrap();
         let interval = self.interval.clone();
 
@@ -194,7 +250,9 @@ impl Watcher {
             let mut interval = time::interval(Duration::from_millis(interval.to_owned()));
             loop {
                 interval.tick().await;
-                internal_ref.redeploy(artifact_ref.clone()).expect("Unable to complete redeploy!");
+                internal_ref
+                    .redeploy(artifact_ref.clone())
+                    .expect("Unable to complete redeploy!");
             }
         });
 
@@ -225,18 +283,21 @@ impl Watcher {
         Ok(())
     }
 
-    fn async_watcher(&self) -> notify::Result<(RecommendedWatcher, Receiver<notify::Result<Event>>)> {
+    fn async_watcher(
+        &self,
+    ) -> notify::Result<(RecommendedWatcher, Receiver<notify::Result<Event>>)> {
         let (tx, rx) = channel(1);
 
-        let watcher = RecommendedWatcher::new(move |res| {
+        let watcher = RecommendedWatcher::new(
+            move |res| {
+                let rt = Runtime::new().unwrap();
 
-            let rt = Runtime::new().unwrap();
-
-            rt.block_on(async {
+                rt.block_on(async {
                     tx.send(res).await.unwrap();
-            })
-
-        }, Config::default())?;
+                })
+            },
+            Config::default(),
+        )?;
 
         Ok((watcher, rx))
     }

@@ -9,20 +9,9 @@
 //
 // See LICENSE file at https://github.com/TorbFoundry/torb/blob/main/LICENSE for details.
 
-use crate::artifacts::{ArtifactRepr};
+use crate::{artifacts::{ArtifactRepr}, utils::{CommandConfig, CommandPipeline}};
 use std::process::Command;
-use thiserror::Error;
 use crate::utils::{torb_path, buildstate_path_or_create};
-
-#[derive(Error, Debug)]
-pub enum TorbDeployerErrors {
-    #[error("Command `{command:?}` failed with response: {response}")]
-    FailedToPlan {
-        command: std::process::Command,
-        response: String,
-    },
-}
-
 pub struct StackDeployer {
     watcher_patch: bool
 }
@@ -93,26 +82,19 @@ impl StackDeployer {
             };
         };
 
-        let mut cmd = Command::new("./terraform");
-        cmd.arg(format!("-chdir={}", iac_env_path.to_str().unwrap()))
-            .arg("plan")
-            .arg("-out=./tfplan");
+        let iac_env_str = iac_env_path.to_str().unwrap();
+        let chdir_arg = format!("-chdir={}", iac_env_str);
+        let cmd_conf = CommandConfig::new(
+            "./terraform",
+            vec![
+                chdir_arg.as_str(),
+                "plan",
+                "-out=./tfplan"
+            ],
+            torb_path.to_str()
+        );
 
-        cmd.current_dir(&torb_path);
-
-        println!("Running command: {:?}", cmd);
-        let out = cmd.output()?;
-
-
-        if !out.status.success() {
-            let err_resp = std::str::from_utf8(&out.stderr).unwrap();
-            let err = TorbDeployerErrors::FailedToPlan {
-                command: cmd,
-                response: err_resp.to_string(),
-            };
-
-            return Err(Box::new(err));
-        }
+        let out = CommandPipeline::execute_single(cmd_conf)?;
 
         if dryrun {
             Ok(out)

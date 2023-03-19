@@ -352,7 +352,9 @@ impl<'a> Composer<'a> {
 
         let main_tf_content_hcl_string = hcl::to_string(&built_content)?;
 
-        println!("{}", main_tf_content_hcl_string);
+        if std::env::var("TORB_DEBUG").is_ok() {
+            println!("{}", main_tf_content_hcl_string);
+        }
 
         fs::write(&main_tf_path, main_tf_content_hcl_string).expect("Failed to write main.tf");
 
@@ -381,8 +383,6 @@ impl<'a> Composer<'a> {
                 }
             })?;
         }
-
-        println!("Build file copying done.");
 
         if !self.fqn_seen.contains(&node.fqn) {
             self.add_stack_node_to_main_struct(node).and_then(|_out| {
