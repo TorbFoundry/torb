@@ -1,6 +1,6 @@
 Business Source License 1.1
 Licensor:  Torb Foundry
-Licensed Work:  Torb v0.3.6-03.19
+Licensed Work:  Torb v0.3.7-03.23
 The Licensed Work is © 2023-Present Torb Foundry
 
 Change License: GNU Affero General Public License Version 3
