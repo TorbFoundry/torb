@@ -1,0 +1,124 @@
+---
+torb_version: v1.0.0
+helm_version: "version.BuildInfo{Version:\"v3.10.2\", GitCommit:\"50f003e5ee8704ec937a756c646870227d7c8b58\", GitTreeState:\"clean\", GoVersion:\"go1.19.3\"}\n"
+terraform_version: "{\n  \"terraform_version\": \"1.2.5\",\n  \"platform\": \"darwin_amd64\",\n  \"provider_selections\": {},\n  \"terraform_outdated\": true\n}\n"
+commits:
+  torb-artifacts2: 3c66d02ece51a14e7eae29f61ee3c9324512a131
+  torb-artifacts: 9361aa54a835e55bf3ac14b7d532813007a6fb5c
+stack_name: next_app
+meta: ~
+deploys:
+  - fqn: next_app.project.next_app_1
+    name: createnextapp
+    version: v1.0.0
+    kind: project
+    lang: typescript
+    init_step:
+      - APP_NAME=$(echo TORB.inputs.name | jq -r)
+      - mkdir $APP_NAME
+      - pushd $APP_NAME
+      - npm_config_yes=true npx create-next-app@latest --typescript $APP_NAME --eslint --src-dir --use-app --no-experimental-app --import-alias @
+      - popd
+      - mv Dockerfile ./$APP_NAME/Dockerfile
+      - pushd $APP_NAME
+      - npm run init
+      - npm run build
+      - popd
+    build_step:
+      script_path: ""
+      dockerfile: Dockerfile
+      tag: latest
+      registry: local
+    deploy_steps:
+      helm:
+        custom: "false"
+        repository: "https://charts.bitnami.com/bitnami"
+        chart: apache
+      tf: ~
+    mapped_inputs:
+      name:
+        - app.name
+        - docsite
+      ingress:
+        - ingress.enabled
+        - true
+    input_spec:
+      name:
+        - string
+        - next_app
+        - app.name
+      ingress:
+        - bool
+        - true
+        - ingress.enabled
+    outputs: []
+    dependencies: []
+    implicit_dependency_fqns: []
+    file_path: /Users/crow/.torb/repositories/torb-artifacts/projects/createnextapp/torb.yaml
+    files:
+      - Dockerfile
+    values: "---\ningress:\n  hosts:\n    - host: next.torblet.app\n      paths:\n        - path: /*\n          pathType: Prefix\n"
+    namespace: ~
+    source: torb-artifacts
+nodes:
+  next_app.project.next_app_1:
+    fqn: next_app.project.next_app_1
+    name: createnextapp
+    version: v1.0.0
+    kind: project
+    lang: typescript
+    init_step:
+      - APP_NAME=$(echo TORB.inputs.name | jq -r)
+      - mkdir $APP_NAME
+      - pushd $APP_NAME
+      - npm_config_yes=true npx create-next-app@latest --typescript $APP_NAME --eslint --src-dir --use-app --no-experimental-app --import-alias @
+      - popd
+      - mv Dockerfile ./$APP_NAME/Dockerfile
+      - pushd $APP_NAME
+      - npm run init
+      - npm run build
+      - popd
+    build_step:
+      script_path: ""
+      dockerfile: Dockerfile
+      tag: latest
+      registry: local
+    deploy_steps:
+      helm:
+        custom: "false"
+        repository: "https://charts.bitnami.com/bitnami"
+        chart: apache
+      tf: ~
+    mapped_inputs:
+      name:
+        - app.name
+        - docsite
+      ingress:
+        - ingress.enabled
+        - true
+    input_spec:
+      name:
+        - string
+        - next_app
+        - app.name
+      ingress:
+        - bool
+        - true
+        - ingress.enabled
+    outputs: []
+    dependencies: []
+    implicit_dependency_fqns: []
+    file_path: /Users/crow/.torb/repositories/torb-artifacts/projects/createnextapp/torb.yaml
+    files:
+      - Dockerfile
+    values: "---\ningress:\n  hosts:\n    - host: next.torblet.app\n      paths:\n        - path: /*\n          pathType: Prefix\n"
+    namespace: ~
+    source: torb-artifacts
+namespace: ~
+release: ~
+repositories: ~
+watcher:
+  paths:
+    - "./"
+  interval: 3000
+  patch: true
