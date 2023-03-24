@@ -12,7 +12,7 @@
 use crate::composer::InputAddress;
 use crate::resolver::inputs::{InputResolver, NO_INITS_FN};
 use crate::resolver::{resolve_stack, NodeDependencies, StackGraph};
-use crate::utils::{buildstate_path_or_create, checksum, kebab_to_snake_case};
+use crate::utils::{buildstate_path_or_create, checksum, kebab_to_snake_case, snake_case_to_kebab};
 use crate::watcher::{WatcherConfig};
 
 use data_encoding::BASE32;
@@ -613,7 +613,7 @@ impl ArtifactNodeRepr {
         }).or(Some(self.name.clone())).unwrap();
 
         if kebab {
-            name.clone()
+            snake_case_to_kebab(&name)
         } else {
             kebab_to_snake_case(&name)
         }
