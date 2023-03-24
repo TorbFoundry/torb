@@ -1,0 +1,26 @@
+version: v1.0.0
+kind: stack
+name: "Next App"
+description: "Template Next App"
+release: "docsite"
+watcher:
+  paths:
+    - ./docsite/src
+  interval: 5000
+  patch: true
+projects:
+  next_app_1:
+    project: createnextapp
+    inputs:
+      name: docsite
+      ingress: true
+    values:
+      ingress:
+        hosts:
+          - host: "next.torblet.tech"
+            paths:
+              - path: /
+                pathType: Prefix
+    build:
+      tag: newest
+      registry: docker.torblet.tech
