@@ -70,7 +70,7 @@ impl<'a> StackInitializer<'a> {
         if node.init_step.is_some() {
             let (_, _, resolved_steps) = InputResolver::resolve(node, NO_VALUES_FN, NO_INPUTS_FN, Some(true))?;
 
-            let script = resolved_steps.unwrap().join(";");
+            let script = resolved_steps.unwrap().join("&&");
 
             run_command_in_user_shell(script, Some("/bin/bash".to_string()))?;
         };

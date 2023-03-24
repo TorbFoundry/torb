@@ -114,7 +114,7 @@ pub fn run_command_in_user_shell(
 
     let output = command.output()?;
 
-    if output.status.success() && output.stderr.is_empty() {
+    if output.status.success() {
         Ok(output)
     } else {
         Err(Box::new(TorbUtilityErrors::UnableToRunCommandInShell {

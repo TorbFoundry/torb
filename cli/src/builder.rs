@@ -185,7 +185,7 @@ impl<'a> StackBuilder<'a> {
         } else {
             let lines: Vec<&str> = contents.split("\n").collect();
 
-            let script_string = lines.join(";");
+            let script_string = lines.join("&&");
 
             run_command_in_user_shell(script_string, None).map_err(|err| {
                 TorbBuilderErrors::UnableToBuildBuildScript {
