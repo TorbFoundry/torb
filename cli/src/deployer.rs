@@ -12,6 +12,16 @@
 use crate::{artifacts::{ArtifactRepr}, utils::{CommandConfig, CommandPipeline}};
 use std::process::Command;
 use crate::utils::{torb_path, buildstate_path_or_create};
+use thiserror::Error;
+
+#[derive(Error, Debug)]
+pub enum TorbDeployErrors {
+    #[error("Failed to deploy stack with reason: {reason}")]
+    FailedDeployment {
+        reason: String
+    }
+}
+
 pub struct StackDeployer {
     watcher_patch: bool
 }
@@ -30,13 +40,9 @@ impl StackDeployer {
     ) -> Result<(), Box<dyn std::error::Error>> {
         println!("Deploying {} stack...", artifact.stack_name.as_str());
 
-        let out = self.init_tf().expect("Failed to initialize terraform.");
-        println!("{}", std::str::from_utf8(&out.stdout).unwrap());
-        println!("{}", std::str::from_utf8(&out.stderr).unwrap());
+        self.init_tf()?;
 
-        let out = self.deploy_tf(dryrun).expect("Failed to plan and deploy terraform.");
-        println!("{}", std::str::from_utf8(&out.stdout).unwrap());
-        println!("{}", std::str::from_utf8(&out.stderr).unwrap());
+        self.deploy_tf(dryrun)?;
 
         Ok(())
     }
@@ -104,7 +110,14 @@ impl StackDeployer {
             .arg("apply")
             .arg("./tfplan")
             .current_dir(&torb_path);
-            Ok(cmd.output()?)
+
+            let output = cmd.output()?;
+
+            if output.status.success() {
+                Ok(cmd.output()?)
+            } else {
+                Err(Box::new(TorbDeployErrors::FailedDeployment { reason: String::from_utf8(output.stderr).unwrap() }))
+            }
         }
     }
 }

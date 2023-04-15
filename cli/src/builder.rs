@@ -11,7 +11,7 @@
 
 use crate::artifacts::{ArtifactNodeRepr, ArtifactRepr};
 use crate::utils::{run_command_in_user_shell, CommandConfig, CommandPipeline};
-use indexmap::IndexSet;
+use indexmap::{IndexSet};
 use std::fs;
 use std::process::{Command, Output};
 use thiserror::Error;
@@ -33,7 +33,8 @@ pub struct StackBuilder<'a> {
     built: IndexSet<String>,
     dryrun: bool,
     build_platforms: String,
-    separate_local_registry: bool
+    separate_local_registry: bool,
+    exempt: std::collections::HashSet<String>,
 }
 
 impl<'a> StackBuilder<'a> {
@@ -41,20 +42,40 @@ impl<'a> StackBuilder<'a> {
         artifact: &'a ArtifactRepr,
         build_platforms: String,
         dryrun: bool,
-        separate_local_registry: bool
+        separate_local_registry: bool,
     ) -> StackBuilder<'a> {
         StackBuilder {
             artifact: artifact,
             built: IndexSet::new(),
             dryrun: dryrun,
             build_platforms: build_platforms,
-            separate_local_registry
+            separate_local_registry,
+            exempt: std::collections::HashSet::new(),
+        }
+    }
+
+    pub fn new_with_exempt_list(
+        artifact: &'a ArtifactRepr,
+        build_platforms: String,
+        dryrun: bool,
+        separate_local_registry: bool,
+        exempt: Vec<String>
+    ) -> StackBuilder<'a> {
+        StackBuilder {
+            artifact: artifact,
+            built: IndexSet::new(),
+            dryrun: dryrun,
+            build_platforms: build_platforms,
+            separate_local_registry,
+            exempt: std::collections::HashSet::from_iter(exempt.iter().cloned()),
         }
     }
 
     pub fn build(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         for node in self.artifact.deploys.iter() {
-            self.walk_artifact(node)?;
+            if self.exempt.get(&node.fqn).is_none() {
+                self.walk_artifact(node)?;
+            }
         }
 
         Ok(())
@@ -63,7 +84,7 @@ impl<'a> StackBuilder<'a> {
     fn build_node(&self, node: &ArtifactNodeRepr) -> Result<(), TorbBuilderErrors> {
         if let Some(step) = node.build_step.clone() {
             if step.dockerfile != "" {
-                let name = node.display_name(None);
+                let name = node.display_name(false);
 
                 self.build_docker(&name, step.dockerfile, step.tag, step.registry)
                     .and_then(|_| Ok(()))
@@ -202,7 +223,9 @@ impl<'a> StackBuilder<'a> {
         // This let me avoid worrying about how to handle duplicate dependencies in the dependency tree data structure.
         // -Ian
         for child in node.dependencies.iter() {
-            self.walk_artifact(child)?
+            if self.exempt.get(&child.fqn).is_none() {
+                self.walk_artifact(child)?
+            }
         }
 
         if !self.built.contains(&node.fqn) {

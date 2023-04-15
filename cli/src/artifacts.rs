@@ -600,9 +600,7 @@ impl Serialize for TorbInputSpec {
 }
 
 impl ArtifactNodeRepr {
-    pub fn display_name(&self, kebab_opt: Option<bool>) -> String {
-        let kebab = kebab_opt.unwrap_or(false);
-
+    pub fn display_name(&self, kebab: bool) -> String {
         let name = self.mapped_inputs.get("name").map(|(_, input)| {
             if let crate::artifacts::TorbInput::String(val) = input.clone() {
                 val

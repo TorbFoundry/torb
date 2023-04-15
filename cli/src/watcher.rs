@@ -19,8 +19,10 @@ use crate::utils::{
     get_resource_kind, CommandConfig, CommandPipeline, PrettyContext, PrettyExit, ResourceKind,
 };
 
+use std::collections::HashSet;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::{sync::PoisonError, time::Duration};
+use indexmap::IndexMap;
 use tokio::{
     runtime::Runtime,
     sync::mpsc::{channel, Receiver},
@@ -36,6 +38,8 @@ pub struct WatcherConfig {
     paths: Vec<String>,
     interval: u64,
     patch: bool,
+    exempt: Vec<String>,
+    dev_mounts: IndexMap<String, IndexMap<String, String>>
 }
 
 impl Default for WatcherConfig {
@@ -44,6 +48,8 @@ impl Default for WatcherConfig {
             paths: vec!["./".to_string()],
             interval: 3000,
             patch: true,
+            exempt: vec![],
+            dev_mounts: IndexMap::new()
         }
     }
 }
@@ -55,19 +61,24 @@ pub struct Watcher {
     pub artifact: Arc<ArtifactRepr>,
     pub build_hash: String,
     pub build_filename: String,
+    pub dev_mounts: IndexMap<String, IndexMap<String, String>>,
     internal: Arc<WatcherInternal>,
 }
 
 struct WatcherInternal {
     pub queue: Mutex<Vec<Event>>,
     pub separate_local_registry: bool,
+    pub exempt: Vec<String>,
+    pub exempt_set: HashSet<String>,
 }
 
 impl WatcherInternal {
-    fn new(separate_local_registry: bool) -> Self {
+    fn new(separate_local_registry: bool, exempt: Vec<String>) -> Self {
         WatcherInternal {
             queue: Mutex::new(Vec::<Event>::new()),
             separate_local_registry,
+            exempt_set: HashSet::from_iter(exempt.iter().cloned()),
+            exempt: exempt,
         }
     }
     fn redeploy(
@@ -83,7 +94,7 @@ impl WatcherInternal {
 
                 let build_platforms = "".to_string();
 
-                let mut builder = StackBuilder::new(&artifact, build_platforms, false, self.separate_local_registry.clone());
+                let mut builder = StackBuilder::new_with_exempt_list(&artifact, build_platforms, false, self.separate_local_registry.clone(), self.exempt.clone());
 
                 builder.build().use_or_pretty_error(
                     false,
@@ -94,7 +105,11 @@ impl WatcherInternal {
                 );
 
                 for (_, node) in artifact.nodes.iter() {
-                    let resource_name = format!("{}-{}", artifact.release(), node.display_name(Some(true)));
+                    if self.exempt_set.get(&node.fqn).is_some() {
+                        continue
+                    };
+
+                    let resource_name = format!("{}-{}", artifact.release(), node.display_name(true));
 
                     let namespace = artifact.namespace(node);
                     let kind_res = get_resource_kind(&resource_name, &namespace);
@@ -150,6 +165,8 @@ impl Watcher {
             local_registry,
             build_hash,
             build_filename,
+            watcher.exempt,
+            watcher.dev_mounts
         )
     }
 
@@ -161,6 +178,8 @@ impl Watcher {
         local_registry: bool,
         build_hash: String,
         build_filename: String,
+        exempt: Vec<String>,
+        mounts: IndexMap<String, IndexMap<String, String>>
     ) -> Self {
         let interval = interval.unwrap_or(3000);
         let patch = patch.unwrap_or(true);
@@ -171,7 +190,7 @@ impl Watcher {
             bufs.push(p);
         }
 
-        let internal = Arc::new(WatcherInternal::new(local_registry));
+        let internal = Arc::new(WatcherInternal::new(local_registry, exempt));
 
         Watcher {
             paths: bufs,
@@ -180,6 +199,7 @@ impl Watcher {
             artifact: Arc::new(artifact),
             build_hash,
             build_filename,
+            dev_mounts: mounts,
             internal,
         }
     }
@@ -207,7 +227,7 @@ impl Watcher {
         );
 
         let mut composer =
-            Composer::new(self.build_hash.clone(), &self.artifact, self.patch.clone());
+            Composer::new_with_dev_mounts(self.build_hash.clone(), &self.artifact, self.patch.clone(), self.dev_mounts.clone());
         composer.compose().unwrap();
 
         let mut deployer = StackDeployer::new(self.patch.clone());

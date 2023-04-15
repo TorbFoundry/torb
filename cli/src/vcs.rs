@@ -302,7 +302,7 @@ impl GitVersionControl for GithubVCS {
             .agent
             .post(&req_string)
             .set("Authorization", &format!("Bearer {}", token));
-        println!("{:?}", req);
+
         let resp = req
             .send_json(ureq::json!({
                 "name": name,

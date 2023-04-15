@@ -20,7 +20,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 use thiserror::Error;
-use indexmap::IndexSet;
+use indexmap::{IndexSet, IndexMap};
 
 #[derive(Error, Debug)]
 pub enum TorbComposerErrors {}
@@ -174,7 +174,8 @@ pub struct Composer<'a> {
     release_name: String,
     main_struct: hcl::BodyBuilder,
     artifact_repr: &'a ArtifactRepr,
-    watcher_patch: bool
+    watcher_patch: bool,
+    dev_mounts: IndexMap<String, IndexMap<String, String>>
 }
 
 impl<'a> Composer<'a> {
@@ -186,7 +187,21 @@ impl<'a> Composer<'a> {
             release_name: artifact_repr.release(),
             main_struct: Body::builder(),
             artifact_repr: artifact_repr,
-            watcher_patch: watcher_patch
+            watcher_patch: watcher_patch,
+            dev_mounts: IndexMap::new()
+        }
+    }
+
+    pub fn new_with_dev_mounts(hash: String, artifact_repr: &ArtifactRepr, watcher_patch: bool, dev_mounts: IndexMap<String, IndexMap<String, String>>) -> Composer {
+        Composer {
+            hash: hash,
+            build_files_seen: IndexSet::new(),
+            fqn_seen: IndexSet::new(),
+            release_name: artifact_repr.release(),
+            main_struct: Body::builder(),
+            artifact_repr: artifact_repr,
+            watcher_patch: watcher_patch,
+            dev_mounts: dev_mounts
         }
     }
 
@@ -227,7 +242,7 @@ impl<'a> Composer<'a> {
 
         match torb_input_address.property_specifier.as_str() {
             "host" => {
-                let name = format!("{}-{}", self.release_name, output_node.display_name(None));
+                let name = format!("{}-{}", self.release_name, output_node.display_name(false));
 
                 let namespace = self.artifact_repr.namespace(output_node);
 
@@ -254,7 +269,7 @@ impl<'a> Composer<'a> {
         };
 
         let formatted_name = kebab_to_snake_case(&self.release_name);
-        let block_name = format!("{}_{}", formatted_name, &output_node.display_name(None));
+        let block_name = format!("{}_{}", formatted_name, &output_node.display_name(false));
 
         format!(
             "jsondecode(data.torb_helm_release.{}.values)[\"{}\"]",
@@ -371,9 +386,9 @@ impl<'a> Composer<'a> {
             self.walk_artifact(child)?
         }
 
-        if !self.build_files_seen.contains(&node.display_name(None)) {
+        if !self.build_files_seen.contains(&node.display_name(false)) {
             self.copy_build_files_for_node(&node).and_then(|_out| {
-                if self.build_files_seen.insert(node.display_name(None).clone()) {
+                if self.build_files_seen.insert(node.display_name(false).clone()) {
                     Ok(())
                 } else {
                     Err(Box::new(std::io::Error::new(
@@ -411,10 +426,10 @@ impl<'a> Composer<'a> {
 
         let data_block = Block::builder("data")
             .add_label("torb_helm_release")
-            .add_label(format!("{}_{}", &snake_case_release_name, &node.display_name(None)))
+            .add_label(format!("{}_{}", &snake_case_release_name, &node.display_name(false)))
             .add_attribute((
                 "release_name",
-                format!("{}-{}", self.release_name.clone(), snake_case_to_kebab(&node.display_name(None))),
+                format!("{}-{}", self.release_name.clone(), snake_case_to_kebab(&node.display_name(false))),
             ))
             .add_attribute(("namespace", namespace))
             .add_attribute((
@@ -443,7 +458,7 @@ impl<'a> Composer<'a> {
             fs::create_dir(&repo_path).expect(&error);
         }
 
-        let env_node_path = repo_path.join(format!("{}_module", &node.display_name(None)));
+        let env_node_path = repo_path.join(format!("{}_module", &node.display_name(false)));
 
         if !env_node_path.exists() {
             let error = format!(
@@ -594,7 +609,7 @@ impl<'a> Composer<'a> {
         let node_source = node.source.clone().unwrap();
         let namespace_dir = kebab_to_snake_case(&node_source);
 
-        let source = format!("./{namespace_dir}/{}_module", node.display_name(None));
+        let source = format!("./{namespace_dir}/{}_module", node.display_name(false));
         let name = node.fqn.clone().replace(".", "_");
 
         let namespace = self.artifact_repr.namespace(node);
@@ -604,7 +619,7 @@ impl<'a> Composer<'a> {
             ("source", source),
             (
                 "release_name",
-                format!("{}-{}", self.release_name.clone(), snake_case_to_kebab(&node.display_name(None))),
+                format!("{}-{}", self.release_name.clone(), snake_case_to_kebab(&node.display_name(false))),
             ),
             ("namespace", namespace),
         ];
@@ -621,10 +636,10 @@ impl<'a> Composer<'a> {
             }
 
             if build_step.registry != "local" {
-                let registry = format!("{}/{}", build_step.registry, node.display_name(None));
+                let registry = format!("{}/{}", build_step.registry, node.display_name(false));
                 image_key_map.insert("repository".to_string(), registry);
             } else {
-                image_key_map.insert("repository".to_string(), node.display_name(None).clone());
+                image_key_map.insert("repository".to_string(), node.display_name(false).clone());
             }
 
             map.insert("image".to_string(), image_key_map);
@@ -707,6 +722,26 @@ impl<'a> Composer<'a> {
         if !values.is_empty() {
             block = block.add_attribute(("values", values));
         }
+
+        let postrender_conf_opt = self.dev_mounts.get(&node.fqn);
+        if postrender_conf_opt.is_some() {
+            let postrender_conf = postrender_conf_opt.unwrap();
+
+            block = block.add_attribute(
+                ("postrender_path", "./torb_artifacts/common/dev/volume_and_mount/kustomize.sh".to_string())
+            );
+
+            block = block.add_attribute((
+                "postrender_args",
+                Expression::Array(vec![
+                    Expression::String(node.display_name(false)),
+                    Expression::String(postrender_conf.get("container_mount").unwrap().to_string()),
+                    Expression::String(postrender_conf.get("local_mount").unwrap().to_string())
+                ])
+            ))
+
+        }
+
 
         if !depends_on_exprs.is_empty() {
             let depends_on = Expression::from(depends_on_exprs);
