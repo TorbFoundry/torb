@@ -11,7 +11,7 @@
 
 pub mod inputs;
 
-use crate::artifacts::{ArtifactNodeRepr, BuildStep, TorbInput};
+use crate::artifacts::{ArtifactNodeRepr, BuildStep, TorbInput, TorbInputSpec};
 use crate::utils::{for_each_artifact_repository, normalize_name, torb_path};
 use crate::watcher::{WatcherConfig};
 
@@ -343,19 +343,70 @@ impl Resolver {
         inputs: IndexMap<String, TorbInput>,
         values: serde_yaml::Value,
         source: &str,
-        namespace: Option<String>
+        namespace: Option<String>,
+        expedient: bool,
+        yaml: Value
     ) -> Result<ArtifactNodeRepr, Box<dyn Error>> {
-        let services_path = artifact_path.join("services");
-        let service_path = services_path.join(service_name);
-        let torb_yaml_path = service_path.join("torb.yaml");
-        let torb_yaml = std::fs::read_to_string(&torb_yaml_path)?;
-        let mut node: ArtifactNodeRepr = serde_yaml::from_str(torb_yaml.as_str())?;
+        let mut node: ArtifactNodeRepr = if expedient {
+            let mut deploy_steps = IndexMap::<String, Option<IndexMap<String, String>>>::new();
+
+            let repo = yaml.get("repository").ok_or("Could not find helm repository for expedient service.")?.as_str().unwrap().to_string();
+            let chart = yaml.get("chart").ok_or("Could not find helm chart for expedient service.")?.as_str().unwrap().to_string();
+
+            let mut helm = IndexMap::<String, String>::new();
+
+            helm.insert("repository".to_string(), repo);
+            helm.insert("chart".to_string(), chart);
+            helm.insert("custom".to_string(), "false".to_string());
+
+            deploy_steps.insert("helm".to_string(), Some(helm));
+
+
+            let services_path = artifact_path.join("services");
+            let service_path = services_path.join("torb-expedient");
+            let torb_yaml_path = service_path.join("torb.yaml");
+            let node_fp = torb_yaml_path
+                .to_str()
+                .ok_or("Could not convert path to string.")?
+                .to_string();
+
+            ArtifactNodeRepr::new(
+                "".to_string(),
+                node_name.to_string(),
+                "".to_string(),
+                "service".to_string(),
+                None,
+                None,
+                None,
+                deploy_steps,
+                IndexMap::<String, (String, TorbInput)>::new(),
+                IndexMap::<String, TorbInputSpec>::new(),
+                Vec::<String>::new(),
+                node_fp,
+                None,
+                None,
+                "".to_string(),
+                None,
+                None,
+                true
+            )
+        } else {
+            let services_path = artifact_path.join("services");
+            let service_path = services_path.join(service_name);
+            let torb_yaml_path = service_path.join("torb.yaml");
+            let torb_yaml = std::fs::read_to_string(&torb_yaml_path)?;
+            let mut deser_node: ArtifactNodeRepr = serde_yaml::from_str(torb_yaml.as_str())?;
+
+            let node_fp = torb_yaml_path
+                .to_str()
+                .ok_or("Could not convert path to string.")?
+                .to_string();
+            deser_node.file_path = node_fp;
+
+            deser_node
+        };
+
         node.fqn = format!("{}.{}.{}", stack_name, stack_kind_name, node_name);
-        let node_fp = torb_yaml_path
-            .to_str()
-            .ok_or("Could not convert path to string.")?
-            .to_string();
-        node.file_path = node_fp;
 
         node.source = Some(source.to_string());
         node.namespace = namespace;
@@ -507,6 +558,8 @@ impl Resolver {
                     x.as_str().unwrap().to_string()
                 });
 
+                let expedient: bool = yaml.get("expedient").is_some();
+
                 self.resolve_service(
                     stack_name,
                     stack_kind_name,
@@ -516,7 +569,9 @@ impl Resolver {
                     inputs,
                     config_values.clone(),
                     repo,
-                    service_namespace
+                    service_namespace,
+                    expedient,
+                    yaml.clone()
                 )
             }
             "project" => {

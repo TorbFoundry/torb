@@ -242,7 +242,7 @@ impl<'a> Composer<'a> {
 
         match torb_input_address.property_specifier.as_str() {
             "host" => {
-                let name = format!("{}-{}", self.release_name, output_node.display_name(false));
+                let name = format!("{}-{}", self.release_name, output_node.display_name(true));
 
                 let namespace = self.artifact_repr.namespace(output_node);
 

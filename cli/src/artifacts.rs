@@ -182,6 +182,8 @@ pub struct ArtifactNodeRepr {
     pub values: String,
     pub namespace: Option<String>,
     pub source: Option<String>,
+    #[serde(default="bool::default")]
+    pub expedient: bool
 }
 
 struct TorbInputDeserializer;
@@ -636,6 +638,7 @@ impl ArtifactNodeRepr {
         values: String,
         namespace: Option<String>,
         source: Option<String>,
+        expedient: bool
     ) -> ArtifactNodeRepr {
         ArtifactNodeRepr {
             fqn: fqn,
@@ -662,6 +665,7 @@ impl ArtifactNodeRepr {
             values,
             namespace,
             source,
+            expedient
         }
     }
 
