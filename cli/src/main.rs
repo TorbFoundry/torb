@@ -296,7 +296,7 @@ fn clone_artifacts() {
 }
 
 fn update_artifacts(name: Option<&str>) {
-    let filter_name = name.unwrap();
+    let filter_name = name.unwrap_or("");
     let torb_path = torb_path();
     let repo_path = torb_path.join("repositories");
 
